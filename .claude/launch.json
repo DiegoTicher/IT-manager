@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Frontend (Vite)",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\npx.cmd",
+      "runtimeArgs": ["vite", "--port", "5173"],
+      "cwd": "frontend",
+      "port": 5173
+    },
+    {
+      "name": "Backend (Flask)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["app.py"],
+      "cwd": "backend",
+      "port": 5000
+    }
+  ]
+}

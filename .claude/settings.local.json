@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l backend/app.py frontend/src/*.js*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(where npm:*)",
+      "Bash(dir \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\")",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\nodejs\\\\npm.cmd\")",
+      "Bash(where /r \"C:\\\\Users\\\\Diego.BRAPIRAREV\\\\AppData\\\\Roaming\" npm.cmd)",
+      "Bash(where /r \"C:\\\\Program Files\" npm.cmd)",
+      "Bash(dir \"C:\\\\Users\\\\Diego.BRAPIRAREV\\\\AppData\\\\Roaming\\\\npm\\\\npm.cmd\")",
+      "Bash(powershell -Command \"Get-Command npm -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\'' -Recurse -Filter ''npm.cmd'' -ErrorAction SilentlyContinue | Select-Object -First 5 FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''C:\\\\nvm4w'',''C:\\\\nvm'',''C:\\\\ProgramData\\\\nvm'',''C:\\\\Users\\\\Diego.BRAPIRAREV\\\\.nvm'',''C:\\\\Users\\\\Diego.BRAPIRAREV\\\\AppData\\\\Local\\\\nvm'' -Recurse -Filter ''npm.cmd'' -ErrorAction SilentlyContinue | Select-Object -First 5 FullName\")",
+      "Bash(npm install:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(cmd.exe /c \"where node\")",
+      "Bash(cmd.exe /c \"node --version && npm --version\")",
+      "Bash(cmd.exe /c \"where npm.cmd 2>nul & where npx.cmd 2>nul & where node.exe 2>nul\")",
+      "Bash(cmd.exe /c \"echo %PATH%\")",
+      "Bash(tr ';' '\\\\n')"
+    ]
+  }
+}
