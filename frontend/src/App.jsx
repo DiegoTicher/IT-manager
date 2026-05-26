@@ -21,10 +21,10 @@ const fmtDateTime = d => d ? new Date(d).toLocaleString('pt-BR') : '-';
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 const STATUS_COLOR = { Ativo: 'bg-emerald-500/20 text-emerald-400', 'Em Manutencao': 'bg-amber-500/20 text-amber-400', Inativo: 'bg-red-500/20 text-red-400', Desativado: 'bg-gray-500/20 text-gray-400' };
 const LIC_COLOR = { Ativa: 'bg-emerald-500/20 text-emerald-400', Expirando: 'bg-amber-500/20 text-amber-400', Expirada: 'bg-red-500/20 text-red-400' };
-const CAT_ICON = { Computador: Monitor, Notebook: Laptop, Celular: Smartphone, Servidor: Server, Impressora: Printer, Monitor: Monitor };
+const CAT_ICON = { Computador: Monitor, Notebook: Laptop, Celular: Smartphone, Servidor: Server, Impressora: Printer, Monitor: Monitor, Cameras: Camera, Camera: Camera };
 const MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-const HISTORY_ICON = { Cadastro: CheckCircle, 'Mudanca de Status': RefreshCw, Transferencia: Users, 'Mudanca de Local': MapPin, 'Mudanca de Condicao': Edit3, Comentario: MessageSquare, 'Manutencao Aberta': Wrench, 'Manutencao Concluida': CheckCircle2 };
-const HISTORY_COLOR = { Cadastro: 'text-emerald-400', 'Mudanca de Status': 'text-blue-400', Transferencia: 'text-violet-400', 'Mudanca de Local': 'text-cyan-400', 'Mudanca de Condicao': 'text-amber-400', Comentario: 'text-slate-400', 'Manutencao Aberta': 'text-red-400', 'Manutencao Concluida': 'text-emerald-400' };
+const HISTORY_ICON = { Cadastro: CheckCircle, 'Mudanca de Status': RefreshCw, Transferencia: Users, 'Mudanca de Local': MapPin, 'Mudanca de Condicao': Edit3, Comentario: MessageSquare, 'Manutencao Aberta': Wrench, 'Manutencao Concluida': CheckCircle2, Atualização: Edit3, Atualizacao: Edit3 };
+const HISTORY_COLOR = { Cadastro: 'text-emerald-400', 'Mudanca de Status': 'text-blue-400', Transferencia: 'text-violet-400', 'Mudanca de Local': 'text-cyan-400', 'Mudanca de Condicao': 'text-amber-400', Comentario: 'text-slate-400', 'Manutencao Aberta': 'text-red-400', 'Manutencao Concluida': 'text-emerald-400', Atualização: 'text-sky-400', Atualizacao: 'text-sky-400' };
 const INV_STATUS_COLOR = { Pendente: 'bg-slate-500/20 text-slate-400', Encontrado: 'bg-emerald-500/20 text-emerald-400', 'Nao Encontrado': 'bg-red-500/20 text-red-400', Danificado: 'bg-amber-500/20 text-amber-400', Divergente: 'bg-violet-500/20 text-violet-400' };
 
 /* ───────── Shared Components ───────── */
@@ -408,18 +408,21 @@ function AssetDetail({ assetId, onBack }) {
 }
 
 /* ═══════════ ASSETS ═══════════ */
-function Assets() {
+function Assets({ user }) {
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('');
   const [stFilter, setStFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [depts, setDepts] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importRes, setImportRes] = useState(null);
   const [form, setForm] = useState({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '' });
+  const [editForm, setEditForm] = useState({ id: '', name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', residual_value: '', useful_life_months: 60, vendor_id: '' });
 
   const load = useCallback(() => {
     setLoading(true);
@@ -427,7 +430,10 @@ function Assets() {
   }, [search, catFilter, stFilter]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { api.departments().then(setDepts); }, []);
+  useEffect(() => { 
+    api.departments().then(setDepts); 
+    api.vendors().then(setVendors).catch(() => {});
+  }, []);
 
   const handleCreate = async () => {
     try {
@@ -435,6 +441,46 @@ function Assets() {
       setShowModal(false); setForm({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '' }); load();
     } catch (err) {
       alert('Erro ao salvar ativo: ' + err.message);
+    }
+  };
+
+  const handleOpenEdit = (asset) => {
+    setEditForm({
+      id: asset.id,
+      name: asset.name || '',
+      category: asset.category || 'Computador',
+      brand: asset.brand || '',
+      model: asset.model || '',
+      serial_number: asset.serial_number || '',
+      asset_tag: asset.asset_tag || '',
+      cost: asset.cost || 0,
+      status: asset.status || 'Ativo',
+      assigned_to: asset.assigned_to || '',
+      department_id: asset.department_id || '',
+      location: asset.location || '',
+      purchase_date: asset.purchase_date || '',
+      warranty_end: asset.warranty_end || '',
+      useful_life_months: asset.useful_life_months || 60,
+      residual_value: asset.residual_value || 0,
+      image_url: asset.image_url || '',
+      vendor_id: asset.vendor_id || ''
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async () => {
+    try {
+      await api.updateAsset(editForm.id, {
+        ...editForm,
+        cost: Number(editForm.cost) || 0,
+        useful_life_months: Number(editForm.useful_life_months) || 60,
+        residual_value: Number(editForm.residual_value) || 0,
+        performed_by: user ? user.username : 'Sistema'
+      });
+      setShowEditModal(false);
+      load();
+    } catch (err) {
+      alert('Erro ao atualizar ativo: ' + err.message);
     }
   };
 
@@ -451,7 +497,7 @@ function Assets() {
 
   if (selectedAsset) return <AssetDetail assetId={selectedAsset} onBack={() => { setSelectedAsset(null); load(); }} />;
 
-  const categories = ['Computador', 'Notebook', 'Celular', 'Monitor', 'Impressora', 'Servidor', 'Acessorio', 'Rede'];
+  const categories = ['Computador', 'Notebook', 'Celular', 'Monitor', 'Impressora', 'Servidor', 'Cameras', 'Acessorio', 'Rede'];
   const statuses = ['Ativo', 'Em Manutencao', 'Inativo', 'Desativado'];
 
   return (
@@ -509,8 +555,9 @@ function Assets() {
                       <td className="px-4 py-3 text-right text-slate-300">{fmt(a.cost)}</td>
                       <td className="px-4 py-3 text-right text-emerald-400 font-medium">{fmt(a.dep?.current_value)}</td>
                       <td className="px-4 py-3 text-right flex gap-2 justify-end">
-                        <button onClick={(e) => { e.stopPropagation(); setSelectedAsset(a.id); }} className="text-slate-500 hover:text-blue-400 transition"><Eye size={16} /></button>
-                        <button onClick={(e) => handleDelete(e, a.id)} className="text-slate-500 hover:text-red-400 transition"><Trash2 size={16} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); setSelectedAsset(a.id); }} title="Visualizar" className="text-slate-500 hover:text-blue-400 transition"><Eye size={16} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); handleOpenEdit(a); }} title="Editar" className="text-slate-500 hover:text-amber-400 transition"><Edit3 size={16} /></button>
+                        <button onClick={(e) => handleDelete(e, a.id)} title="Excluir" className="text-slate-500 hover:text-red-400 transition"><Trash2 size={16} /></button>
                       </td>
                     </tr>
                   );
@@ -547,6 +594,50 @@ function Assets() {
         <div className="flex justify-end gap-3 mt-4">
           <button onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
           <button onClick={handleCreate} disabled={!form.name || !form.category} className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition">Criar Ativo</button>
+        </div>
+      </Modal>
+
+      <Modal open={showEditModal} onClose={() => setShowEditModal(false)} title="Editar Ativo">
+        <div className="grid grid-cols-2 gap-x-3">
+          <Input label="Nome *" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} placeholder="Dell Optiplex 7090" />
+          <Select label="Categoria *" options={categories} value={editForm.category} onChange={e => setEditForm({ ...editForm, category: e.target.value })} />
+          <Input label="Marca" value={editForm.brand} onChange={e => setEditForm({ ...editForm, brand: e.target.value })} placeholder="Dell" />
+          <Input label="Modelo" value={editForm.model} onChange={e => setEditForm({ ...editForm, model: e.target.value })} placeholder="Optiplex 7090" />
+          <Input label="Numero de Serie" value={editForm.serial_number} onChange={e => setEditForm({ ...editForm, serial_number: e.target.value })} />
+          <Input label="Patrimonio" value={editForm.asset_tag} onChange={e => setEditForm({ ...editForm, asset_tag: e.target.value })} placeholder="PAT-009" />
+          <Input label="Custo (R$)" type="number" value={editForm.cost} onChange={e => setEditForm({ ...editForm, cost: e.target.value })} />
+          <Select label="Status" options={statuses} value={editForm.status} onChange={e => setEditForm({ ...editForm, status: e.target.value })} />
+          <label className="block mb-3"><span className="text-sm text-slate-400 mb-1 block">Condicao</span>
+            <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={editForm.condition} onChange={e => setEditForm({ ...editForm, condition: e.target.value })}>
+              {['Novo', 'Bom', 'Regular', 'Ruim', 'Defeituoso'].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <Input label="Responsavel" value={editForm.assigned_to} onChange={e => setEditForm({ ...editForm, assigned_to: e.target.value })} />
+          <label className="block mb-3"><span className="text-sm text-slate-400 mb-1 block">Departamento</span>
+            <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={editForm.department_id} onChange={e => setEditForm({ ...editForm, department_id: e.target.value })}>
+              <option value="">Nenhum</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+          <label className="block mb-3"><span className="text-sm text-slate-400 mb-1 block">Fornecedor</span>
+            <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={editForm.vendor_id} onChange={e => setEditForm({ ...editForm, vendor_id: e.target.value })}>
+              <option value="">Nenhum</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </label>
+          <Input label="Localizacao" value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} placeholder="Sala TI" />
+          <Input label="Data Compra" type="date" value={editForm.purchase_date} onChange={e => setEditForm({ ...editForm, purchase_date: e.target.value })} />
+          <Input label="Fim Garantia" type="date" value={editForm.warranty_end} onChange={e => setEditForm({ ...editForm, warranty_end: e.target.value })} />
+          <Input label="Vida Util (meses)" type="number" value={editForm.useful_life_months} onChange={e => setEditForm({ ...editForm, useful_life_months: e.target.value })} />
+          <Input label="Valor Residual (R$)" type="number" value={editForm.residual_value} onChange={e => setEditForm({ ...editForm, residual_value: e.target.value })} />
+          <div className="col-span-2">
+            <TextArea label="Observacoes / Notas" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} placeholder="Notas explicativas sobre o ativo..." />
+          </div>
+          <div className="col-span-2">
+            <ImageUpload label="Foto do Equipamento" value={editForm.image_url} onChange={val => setEditForm({ ...editForm, image_url: val })} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-4">
+          <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
+          <button onClick={handleEditSave} disabled={!editForm.name || !editForm.category} className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition">Salvar Alteracoes</button>
         </div>
       </Modal>
 
@@ -1132,7 +1223,7 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case 'dashboard': return <Dashboard />;
-      case 'assets': return <Assets />;
+      case 'assets': return <Assets user={user} />;
       case 'licenses': return <Licenses />;
       case 'budget': return <Budget />;
       case 'inventories': return <Inventories />;

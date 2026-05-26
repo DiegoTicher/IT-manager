@@ -12,7 +12,7 @@ app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="")
 CORS(app)
 DATABASE = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "it_manager.db"))
 HOST = os.environ.get("HOST", "0.0.0.0")
-PORT = int(os.environ.get("PORT", 5004))
+PORT = int(os.environ.get("PORT", 5000))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 
@@ -312,17 +312,101 @@ def update_asset(aid):
     old = query_db("SELECT * FROM assets WHERE id=?", [aid], one=True)
     if not old: return error("Ativo nao encontrado", 404)
 
-    # Detecta mudancas para logar
-    if d.get("status") and d["status"] != old["status"]:
-        log_asset_history(aid, "Mudanca de Status", old["status"], d["status"], d.get("performed_by","Sistema"), d.get("status_notes",""))
-    if d.get("assigned_to") and d["assigned_to"] != old["assigned_to"]:
-        log_asset_history(aid, "Transferencia", old["assigned_to"] or "Ninguem", d["assigned_to"], d.get("performed_by","Sistema"), d.get("transfer_notes",""))
-    if d.get("location") and d["location"] != old["location"]:
-        log_asset_history(aid, "Mudanca de Local", old["location"] or "N/A", d["location"], d.get("performed_by","Sistema"), "")
-    if d.get("condition") and d["condition"] != old["condition"]:
-        log_asset_history(aid, "Mudanca de Condicao", old["condition"], d["condition"], d.get("performed_by","Sistema"), "")
+    performed_by = d.get("performed_by", "Sistema")
+    fields = [
+        "name", "category", "serial_number", "asset_tag", "brand", 
+        "model", "status", "condition", "assigned_to", "department_id", 
+        "location", "cost", "notes", "image_url", "purchase_date", 
+        "warranty_end", "residual_value", "useful_life_months", "vendor_id"
+    ]
 
-    fields = ["name","category","serial_number","asset_tag","brand","model","status","condition","assigned_to","department_id","location","cost","notes","image_url"]
+    field_labels = {
+        "name": "Nome",
+        "category": "Categoria",
+        "serial_number": "Número de Série",
+        "asset_tag": "Patrimônio",
+        "brand": "Marca",
+        "model": "Modelo",
+        "status": "Status",
+        "condition": "Condição",
+        "assigned_to": "Responsável",
+        "department_id": "Departamento",
+        "location": "Localização",
+        "cost": "Custo",
+        "notes": "Notas",
+        "image_url": "Foto do Equipamento",
+        "purchase_date": "Data de Compra",
+        "warranty_end": "Fim da Garantia",
+        "residual_value": "Valor Residual",
+        "useful_life_months": "Vida Útil (meses)",
+        "vendor_id": "Fornecedor"
+    }
+
+    # Detecta mudancas para logar no historico
+    for f in fields:
+        if f in d:
+            new_val = d[f]
+            if isinstance(new_val, str) and new_val.strip() == "":
+                new_val = None
+            old_val = old[f]
+            
+            # Normalizações para comparação numérica
+            if f in ["cost", "residual_value"]:
+                try:
+                    new_val_comp = float(new_val) if new_val is not None else 0.0
+                    old_val_comp = float(old_val) if old_val is not None else 0.0
+                except:
+                    new_val_comp = new_val
+                    old_val_comp = old_val
+            elif f == "useful_life_months":
+                try:
+                    new_val_comp = int(new_val) if new_val is not None else 0
+                    old_val_comp = int(old_val) if old_val is not None else 0
+                except:
+                    new_val_comp = new_val
+                    old_val_comp = old_val
+            else:
+                new_val_comp = new_val
+                old_val_comp = old_val
+
+            if new_val_comp != old_val_comp:
+                label = field_labels.get(f, f)
+                from_str = str(old_val) if old_val is not None else "Nenhum"
+                to_str = str(new_val) if new_val is not None else "Nenhum"
+                
+                # Resolução amigável de chaves estrangeiras
+                if f == "department_id":
+                    old_dept = query_db("SELECT name FROM departments WHERE id=?", [old_val], one=True) if old_val else None
+                    new_dept = query_db("SELECT name FROM departments WHERE id=?", [new_val], one=True) if new_val else None
+                    from_str = old_dept["name"] if old_dept else "Nenhum"
+                    to_str = new_dept["name"] if new_dept else "Nenhum"
+                elif f == "vendor_id":
+                    old_vend = query_db("SELECT name FROM vendors WHERE id=?", [old_val], one=True) if old_val else None
+                    new_vend = query_db("SELECT name FROM vendors WHERE id=?", [new_val], one=True) if new_val else None
+                    from_str = old_vend["name"] if old_vend else "Nenhum"
+                    to_str = new_vend["name"] if new_vend else "Nenhum"
+                elif f in ["cost", "residual_value"]:
+                    from_str = f"R$ {float(old_val_comp):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    to_str = f"R$ {float(new_val_comp):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                
+                action_name = "Atualização"
+                notes_msg = f"Campo '{label}' modificado de '{from_str}' para '{to_str}'"
+                
+                if f == "status":
+                    action_name = "Mudanca de Status"
+                    notes_msg = d.get("status_notes", "") or f"Status alterado de '{from_str}' para '{to_str}'"
+                elif f == "assigned_to":
+                    action_name = "Transferencia"
+                    notes_msg = d.get("transfer_notes", "") or f"Responsável alterado de '{from_str}' para '{to_str}'"
+                elif f == "location":
+                    action_name = "Mudanca de Local"
+                    notes_msg = f"Localização alterada de '{from_str}' para '{to_str}'"
+                elif f == "condition":
+                    action_name = "Mudanca de Condicao"
+                    notes_msg = f"Condição alterada de '{from_str}' para '{to_str}'"
+                
+                log_asset_history(aid, action_name, from_str, to_str, performed_by, notes_msg)
+
     sets = []
     vals = []
     for f in fields:
@@ -526,6 +610,11 @@ def inventory_summary():
 def list_depts():
     return success(query_db("SELECT d.*,COUNT(a.id) as cnt FROM departments d LEFT JOIN assets a ON d.id=a.department_id GROUP BY d.id ORDER BY d.name"))
 
+@app.route("/api/vendors")
+@auth_required
+def list_vendors():
+    return success(query_db("SELECT * FROM vendors ORDER BY name"))
+
 @app.route("/api/health")
 def health():
     return success({"status":"online","version":"2.0","frameworks":["ITIL 4","ISO 19770","ISO 27001","COBIT 2019"]})
@@ -581,4 +670,4 @@ if __name__=="__main__":
     else:
         # Desenvolvimento
         print(f"[DEV] http://localhost:{PORT}")
-        app.run(host="127.0.0.1", port=PORT, debug=True)
+        app.run(host=HOST, port=PORT, debug=True)

@@ -45,6 +45,7 @@ export const api={
   // Other
   inventorySummary:()=>req('/inventory/summary'),
   departments:()=>req('/departments'),
+  vendors:()=>req('/vendors'),
   uploadImage: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
