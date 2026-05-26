@@ -46,6 +46,9 @@ export const api={
   inventorySummary:()=>req('/inventory/summary'),
   departments:()=>req('/departments'),
   vendors:()=>req('/vendors'),
+  listUsers:()=>req('/users'),
+  createUser:(d)=>req('/users',{method:'POST',body:d}),
+  deleteUser:(id)=>req('/users/'+id,{method:'DELETE'}),
   uploadImage: async (file) => {
     const formData = new FormData();
     formData.append('file', file);

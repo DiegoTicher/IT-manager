@@ -615,6 +615,40 @@ def list_depts():
 def list_vendors():
     return success(query_db("SELECT * FROM vendors ORDER BY name"))
 
+@app.route("/api/users", methods=["GET"])
+@auth_required
+def list_users():
+    if g.user["role"] != "admin": return error("Acesso restrito para administradores", 403)
+    users = query_db("SELECT id, username, role, created_at FROM users ORDER BY username")
+    return success(users)
+
+@app.route("/api/users", methods=["POST"])
+@auth_required
+def create_user():
+    if g.user["role"] != "admin": return error("Acesso restrito para administradores", 403)
+    d = request.json
+    u = d.get("username", "").strip()
+    p = d.get("password", "").strip()
+    r = d.get("role", "admin").strip()
+    if not u or not p: return error("Usuário e senha são obrigatórios")
+    
+    existing = query_db("SELECT id FROM users WHERE username=?", [u], one=True)
+    if existing: return error("Nome de usuário já cadastrado")
+    
+    pwd_hash = hashlib.sha256(p.encode()).hexdigest()
+    uid = gen_id()
+    execute_db("INSERT INTO users(id, username, password, role) VALUES(?,?,?,?)", (uid, u, pwd_hash, r))
+    return success({"id": uid, "username": u, "role": r}, "Usuário cadastrado com sucesso", 201)
+
+@app.route("/api/users/<uid>", methods=["DELETE"])
+@auth_required
+def delete_user(uid):
+    if g.user["role"] != "admin": return error("Acesso restrito para administradores", 403)
+    if uid == g.user["id"]: return error("Você não pode excluir o seu próprio usuário")
+    
+    execute_db("DELETE FROM users WHERE id=?", [uid])
+    return success(message="Usuário removido com sucesso")
+
 @app.route("/api/health")
 def health():
     return success({"status":"online","version":"2.0","frameworks":["ITIL 4","ISO 19770","ISO 27001","COBIT 2019"]})

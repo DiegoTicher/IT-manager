@@ -1144,6 +1144,7 @@ const NAV = [
   { key: 'budget', label: 'Orcamento', icon: DollarSign },
   { key: 'inventories', label: 'Inventarios', icon: ClipboardCheck },
   { key: 'summary', label: 'Resumo', icon: Package },
+  { key: 'users', label: 'Usuários', icon: Users },
 ];
 
 function Login({ onLogin }) {
@@ -1202,6 +1203,119 @@ function Login({ onLogin }) {
   );
 }
 
+/* ═══════════ USER MANAGEMENT (ADMIN) ═══════════ */
+function UsersPage() {
+  const [usersList, setUsersList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({ username: '', password: '', role: 'admin' });
+
+  const load = () => {
+    setLoading(true);
+    api.listUsers().then(setUsersList).finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const handleCreate = async () => {
+    try {
+      await api.createUser(form);
+      setShowModal(false);
+      setForm({ username: '', password: '', role: 'admin' });
+      load();
+    } catch (err) {
+      alert('Erro ao criar usuário: ' + err.message);
+    }
+  };
+
+  const handleDelete = async (id, username) => {
+    if (!window.confirm(`Deseja realmente remover o usuário "${username}"?`)) return;
+    try {
+      await api.deleteUser(id);
+      load();
+    } catch (err) {
+      alert('Erro ao remover usuário: ' + err.message);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Controle de Usuários</h1>
+          <p className="text-slate-400 text-sm mt-1">Gerenciamento de acessos de administradores e operadores</p>
+        </div>
+        <button onClick={() => setShowModal(true)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition">
+          <Plus size={16} /> Novo Usuário
+        </button>
+      </div>
+
+      {loading ? <Loading /> : (
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-700 text-slate-400 text-left">
+                  <th className="px-4 py-3 font-medium">Nome de Usuário</th>
+                  <th className="px-4 py-3 font-medium">Nível de Acesso</th>
+                  <th className="px-4 py-3 font-medium">Data de Cadastro</th>
+                  <th className="px-4 py-3 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {usersList.map(u => (
+                  <tr key={u.id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-xs uppercase">
+                          {u.username.slice(0, 2)}
+                        </div>
+                        <span className="text-white font-medium">{u.username}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${u.role === 'admin' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                        {u.role === 'admin' ? 'Administrador' : 'Operador'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-300">{fmtDateTime(u.created_at)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => handleDelete(u.id, u.username)} className="text-slate-500 hover:text-red-400 transition">
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {usersList.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-12 text-center text-slate-500">Nenhum usuário cadastrado</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <Modal open={showModal} onClose={() => setShowModal(false)} title="Novo Usuário">
+        <Input label="Nome de Usuário *" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="Ex: rafael.souza" />
+        <Input label="Senha *" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="••••••••" />
+        <label className="block mb-3">
+          <span className="text-sm text-slate-400 mb-1 block">Nível de Acesso *</span>
+          <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+            <option value="admin">Administrador</option>
+            <option value="operator">Operador</option>
+          </select>
+        </label>
+        <div className="flex justify-end gap-3 mt-4">
+          <button onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
+          <button onClick={handleCreate} disabled={!form.username || !form.password} className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition">Criar Usuário</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1228,6 +1342,7 @@ export default function App() {
       case 'budget': return <Budget />;
       case 'inventories': return <Inventories />;
       case 'summary': return <InventorySummary />;
+      case 'users': return user && user.role === 'admin' ? <UsersPage /> : <Dashboard />;
       default: return <Dashboard />;
     }
   };
@@ -1243,7 +1358,7 @@ export default function App() {
           </div>
         </div>
         <nav className="p-3 space-y-1">
-          {NAV.map(({ key, label, icon: Icon }) => (
+          {NAV.filter(item => item.key !== 'users' || (user && user.role === 'admin')).map(({ key, label, icon: Icon }) => (
             <button key={key} onClick={() => { setPage(key); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition ${page === key ? 'bg-blue-600/20 text-blue-400' : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'}`}>
               <Icon size={18} />{label}
