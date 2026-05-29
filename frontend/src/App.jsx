@@ -6,7 +6,7 @@ import {
   TrendingUp, Package, Shield, RefreshCw, Building2, Users, ArrowLeft,
   MessageSquare, Wrench, Send, Eye, ClipboardCheck, CalendarDays,
   MapPin, UserCheck, ChevronRight, CircleDot, Edit3, XCircle, CheckCircle2,
-  Camera, Image as ImageIcon, Upload, Download, FileText
+  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -189,7 +189,8 @@ function AssetDetail({ assetId, onBack }) {
   const [tab, setTab] = useState('timeline');
   const [showMaint, setShowMaint] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
-  const [maintForm, setMaintForm] = useState({ type: 'Corretiva', description: '', vendor: '', cost: '', performed_by: '' });
+  const [showTermPrintModal, setShowTermPrintModal] = useState(false);
+  const [maintForm, setMaintForm] = useState({ type: 'Corretiva', description: '', vendor: '', cost: '', performed_by: '', image_url: '' });
   const [statusForm, setStatusForm] = useState({ status: '', performed_by: '', status_notes: '' });
 
   const load = () => { setLoading(true); api.getAsset(assetId).then(setAsset).finally(() => setLoading(false)); };
@@ -203,7 +204,7 @@ function AssetDetail({ assetId, onBack }) {
 
   const handleMaint = async () => {
     await api.createMaintenance(assetId, { ...maintForm, cost: Number(maintForm.cost) || 0 });
-    setShowMaint(false); setMaintForm({ type: 'Corretiva', description: '', vendor: '', cost: '', performed_by: '' }); load();
+    setShowMaint(false); setMaintForm({ type: 'Corretiva', description: '', vendor: '', cost: '', performed_by: '', image_url: '' }); load();
   };
 
   const handleCloseMaint = async (mid) => {
@@ -278,6 +279,73 @@ function AssetDetail({ assetId, onBack }) {
           <p className="text-xs text-slate-500">Garantia</p><p className="text-white font-medium text-sm">{fmtDate(asset.warranty_end)}</p>
         </div>
       </div>
+
+      {/* Conformidade pós-desativação (Visualização de Detalhes) */}
+      {(asset.status === 'Desativado' || asset.status === 'Inativo') && (
+        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 space-y-3">
+          <h3 className="text-amber-400 font-bold text-sm flex items-center gap-1.5"><Shield size={16} /> Conformidade Pós-Desativação (LGPD & Ambiental)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className="bg-slate-900/40 p-3 rounded-lg border border-slate-800 flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${asset.deactivation_wiped ? 'bg-emerald-500' : 'bg-red-500'}`} />
+              <span className="text-slate-400">Sanitização de Dados (LGPD Data Wiping):</span>
+              <strong className="text-white">{asset.deactivation_wiped ? 'Efetuada' : 'Pendente'}</strong>
+            </div>
+            <div className="bg-slate-900/40 p-3 rounded-lg border border-slate-800 flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${asset.deactivation_eco_recycle ? 'bg-emerald-500' : 'bg-red-500'}`} />
+              <span className="text-slate-400">Descarte Ecológico Certificado:</span>
+              <strong className="text-white">{asset.deactivation_eco_recycle ? 'Efetuado' : 'Pendente'}</strong>
+            </div>
+          </div>
+          {asset.deactivation_notes && (
+            <div className="bg-slate-900/30 p-3 border border-slate-800 rounded-lg text-xs">
+              <p className="text-slate-500 font-semibold mb-1">Justificativa:</p>
+              <p className="text-slate-300 italic">"{asset.deactivation_notes}"</p>
+            </div>
+          )}
+          {asset.deactivation_document_url && (
+            <div className="pt-1">
+              <a href={asset.deactivation_document_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-semibold transition">
+                <FileText size={14} /> Baixar/Visualizar Laudo de Descarte
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Termo de Responsabilidade */}
+      {asset.assigned_to && (
+        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <h3 className="text-white font-bold text-sm flex items-center gap-1.5"><FileText size={16} className="text-blue-400" /> Termo de Responsabilidade</h3>
+            <button onClick={() => setShowTermPrintModal(true)} className="flex items-center gap-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 px-3 py-1.5 rounded-lg text-xs font-semibold transition shrink-0">
+              <Download size={14} /> Gerar Termo de Responsabilidade
+            </button>
+          </div>
+          <div className="text-slate-400 text-xs leading-relaxed">
+            {asset.responsibility_term_url ? (
+              <div className="flex items-center justify-between bg-slate-900/40 p-3 rounded-lg border border-slate-800 gap-3">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <CheckCircle size={16} />
+                  <span>Termo assinado anexado e verificado!</span>
+                </div>
+                <a href={asset.responsibility_term_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-semibold transition" title="Visualizar Termo Anexo">
+                  <Eye size={14} /> Visualizar Documento
+                </a>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="italic text-slate-500">Nenhum termo assinado anexado até o momento. Por favor, emita o termo acima, colete a assinatura do portador e anexe abaixo:</p>
+                <div className="max-w-xs">
+                  <ImageUpload label="Anexar Termo Assinado (PDF ou Imagem)" value={asset.responsibility_term_url || ''} onChange={async (val) => {
+                    await api.updateAsset(assetId, { responsibility_term_url: val });
+                    load();
+                  }} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Action Buttons */}
       <div className="flex flex-wrap gap-2">
@@ -381,6 +449,13 @@ function AssetDetail({ assetId, onBack }) {
                 {m.end_date && <span>Fim: {fmtDate(m.end_date)}</span>}
               </div>
               {m.notes && <p className="text-slate-400 text-xs mt-2 italic">{m.notes}</p>}
+              {m.image_url && (
+                <div className="mt-3 max-w-xs rounded-lg overflow-hidden border border-slate-700/50">
+                  <a href={m.image_url} target="_blank" rel="noreferrer" title="Visualizar Foto Ampliada">
+                    <img src={m.image_url} alt="Foto da Avaria" className="w-full h-auto object-cover max-h-40 hover:scale-105 transition duration-300" />
+                  </a>
+                </div>
+              )}
             </div>
           ))}
           {(!asset.maintenance || asset.maintenance.length === 0) && (
@@ -409,9 +484,72 @@ function AssetDetail({ assetId, onBack }) {
           <Input label="Custo Estimado (R$)" type="number" value={maintForm.cost} onChange={e => setMaintForm({ ...maintForm, cost: e.target.value })} />
           <Input label="Responsavel" value={maintForm.performed_by} onChange={e => setMaintForm({ ...maintForm, performed_by: e.target.value })} />
         </div>
+        <div className="mb-3">
+          <ImageUpload label="Foto da Avaria (Opcional)" value={maintForm.image_url} onChange={val => setMaintForm({ ...maintForm, image_url: val })} />
+        </div>
         <div className="flex justify-end gap-3 mt-2">
           <button onClick={() => setShowMaint(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
           <button onClick={handleMaint} disabled={!maintForm.description} className="px-4 py-2 rounded-lg text-sm bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white font-medium transition">Abrir Manutencao</button>
+        </div>
+      </Modal>
+
+      {/* Modal de Impressão do Termo de Responsabilidade */}
+      <Modal open={showTermPrintModal} onClose={() => setShowTermPrintModal(false)} title="Termo de Responsabilidade">
+        <div id="print-term-area" className="bg-white text-black p-8 rounded-lg max-h-[60vh] overflow-y-auto space-y-6 font-sans">
+          <div className="text-center space-y-1 border-b pb-4">
+            <h2 className="text-xl font-bold uppercase tracking-wide">Termo de Responsabilidade de Equipamento</h2>
+            <p className="text-xs text-gray-500">IT MANAGER - GOVERNANÇA DE TI & CONTROLE OPERACIONAL</p>
+          </div>
+          <div className="text-sm space-y-4 leading-relaxed">
+            <p>
+              Eu, <strong className="text-black">{asset.assigned_to}</strong>, pertencente ao departamento{' '}
+              <strong className="text-black">{asset.dept || '-'}</strong>, declaro para os devidos fins ter recebido da empresa,{' '}
+              nesta data, o equipamento de TI descrito abaixo, de propriedade da empresa, em perfeito estado de conservação e funcionamento:
+            </p>
+            <div className="bg-gray-100 p-4 rounded-lg border space-y-2 text-xs">
+              <p><strong>Equipamento / Ativo</strong>: {asset.name}</p>
+              <p><strong>Categoria</strong>: {asset.category}</p>
+              <p><strong>Marca / Modelo</strong>: {asset.brand} {asset.model}</p>
+              <p><strong>Nº de Série</strong>: {asset.serial_number || '-'}</p>
+              <p><strong>Código de Patrimônio</strong>: {asset.asset_tag || '-'}</p>
+              <p><strong>Valor Estimado</strong>: {fmt(asset.cost)}</p>
+            </div>
+            <p>
+              Comprometo-me a zelar pela guarda, integridade e correta utilização do equipamento acima especificado, assumindo a{' '}
+              responsabilidade exclusiva por danos decorrentes de negligência, imperícia ou uso inadequado, autorizando, desde já,{' '}
+              o desconto em folha de pagamento de eventuais prejuízos causados por perda ou avarias decorrentes de conduta culposa.{' '}
+              Comprometo-me, ainda, a devolvê-lo imediatamente em caso de rescisão do contrato de trabalho ou quando solicitado pela TI.
+            </p>
+            <p className="text-right mt-6">
+              Brasil, {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}.
+            </p>
+            <div className="grid grid-cols-2 gap-8 pt-8 text-center text-xs">
+              <div className="border-t pt-4">
+                <p className="font-bold">{asset.assigned_to}</p>
+                <p className="text-gray-500">Assinatura do Colaborador</p>
+              </div>
+              <div className="border-t pt-4">
+                <p className="font-bold">Departamento de TI</p>
+                <p className="text-gray-500">Assinatura do Gestor</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-5">
+          <button onClick={() => {
+            const printContent = document.getElementById("print-term-area").innerHTML;
+            const style = '<style>body { background: white !important; color: black !important; padding: 2cm !important; font-family: sans-serif !important; } .bg-gray-100 { background: #f3f4f6 !important; padding: 1rem !important; border-radius: 0.5rem !important; } .rounded-lg { border-radius: 0.5rem !important; } .border { border: 1px solid #e5e7eb !important; } @media print { body { padding: 0 !important; } button { display: none !important; } }</style>';
+            const win = window.open("", "_blank");
+            win.document.write("<html><head><title>Termo de Responsabilidade</title>" + style + "</head><body>" + printContent + "</body></html>");
+            win.document.close();
+            win.focus();
+            setTimeout(() => { win.print(); win.close(); }, 500);
+          }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition">
+            Imprimir / Salvar em PDF
+          </button>
+          <button onClick={() => setShowTermPrintModal(false)} className="px-4 py-2 text-slate-400 hover:text-white rounded-lg text-xs transition">
+            Fechar
+          </button>
         </div>
       </Modal>
     </div>
@@ -432,8 +570,8 @@ function Assets({ user }) {
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [importRes, setImportRes] = useState(null);
-  const [form, setForm] = useState({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', pulsus_number: '' });
-  const [editForm, setEditForm] = useState({ id: '', name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', residual_value: '', useful_life_months: 60, vendor_id: '', pulsus_number: '' });
+  const [form, setForm] = useState({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', pulsus_number: '', deactivation_wiped: 0, deactivation_eco_recycle: 0, deactivation_document_url: '', deactivation_notes: '', responsibility_term_url: '' });
+  const [editForm, setEditForm] = useState({ id: '', name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', residual_value: '', useful_life_months: 60, vendor_id: '', pulsus_number: '', deactivation_wiped: 0, deactivation_eco_recycle: 0, deactivation_document_url: '', deactivation_notes: '', responsibility_term_url: '' });
 
   const load = useCallback(() => {
     setLoading(true);
@@ -461,7 +599,7 @@ function Assets({ user }) {
 
     try {
       await api.createAsset({ ...form, cost: Number(form.cost) || 0 });
-      setShowModal(false); setForm({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', pulsus_number: '' }); load();
+      setShowModal(false); setForm({ name: '', category: 'Computador', brand: '', model: '', serial_number: '', asset_tag: '', cost: '', status: 'Ativo', assigned_to: '', department_id: '', location: '', purchase_date: '', warranty_end: '', image_url: '', pulsus_number: '', deactivation_wiped: 0, deactivation_eco_recycle: 0, deactivation_document_url: '', deactivation_notes: '', responsibility_term_url: '' }); load();
     } catch (err) {
       alert('Erro ao salvar ativo: ' + err.message);
     }
@@ -487,7 +625,12 @@ function Assets({ user }) {
       residual_value: asset.residual_value || 0,
       image_url: asset.image_url || '',
       vendor_id: asset.vendor_id || '',
-      pulsus_number: asset.pulsus_number || ''
+      pulsus_number: asset.pulsus_number || '',
+      deactivation_wiped: asset.deactivation_wiped || 0,
+      deactivation_eco_recycle: asset.deactivation_eco_recycle || 0,
+      deactivation_document_url: asset.deactivation_document_url || '',
+      deactivation_notes: asset.deactivation_notes || '',
+      responsibility_term_url: asset.responsibility_term_url || ''
     });
     setShowEditModal(true);
   };
@@ -664,6 +807,26 @@ function Assets({ user }) {
           <div className="col-span-2">
             <ImageUpload label="Foto do Equipamento" value={editForm.image_url} onChange={val => setEditForm({ ...editForm, image_url: val })} />
           </div>
+          {(editForm.status === 'Desativado' || editForm.status === 'Inativo') && (
+            <div className="col-span-2 mt-4 bg-slate-950/40 border border-slate-700/60 rounded-xl p-4 space-y-4">
+              <h3 className="text-amber-400 font-bold text-sm flex items-center gap-1.5"><Shield size={16} /> Conformidade Pós-Desativação (LGPD & Ambiental)</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Este ativo foi marcado como <strong>{editForm.status}</strong>. Responda aos controles de governança necessários para baixa segura:
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4 py-1">
+                <label className="flex items-center gap-2 text-white text-xs font-semibold cursor-pointer">
+                  <input type="checkbox" checked={!!editForm.deactivation_wiped} onChange={e => setEditForm({ ...editForm, deactivation_wiped: e.target.checked ? 1 : 0 })} className="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-500 w-4 h-4" />
+                  Sanitização de Dados (Data Wiping / LGPD)
+                </label>
+                <label className="flex items-center gap-2 text-white text-xs font-semibold cursor-pointer">
+                  <input type="checkbox" checked={!!editForm.deactivation_eco_recycle} onChange={e => setEditForm({ ...editForm, deactivation_eco_recycle: e.target.checked ? 1 : 0 })} className="rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-500 w-4 h-4" />
+                  Descarte Ecológico Certificado (E-Waste)
+                </label>
+              </div>
+              <TextArea label="Justificativa de Desativação" value={editForm.deactivation_notes} onChange={e => setEditForm({ ...editForm, deactivation_notes: e.target.value })} placeholder="Ex: Equipamento obsoleto, sem condições de reparo..." />
+              <ImageUpload label="Anexar Laudo / Termo de Descarte (PDF ou Imagem)" value={editForm.deactivation_document_url} onChange={val => setEditForm({ ...editForm, deactivation_document_url: val })} />
+            </div>
+          )}
         </div>
         <div className="flex justify-end gap-3 mt-4">
           <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
@@ -726,7 +889,18 @@ function Licenses({ user }) {
   const [form, setForm] = useState({ name: '', vendor_name: '', license_type: 'Assinatura', category: '', total_seats: 1, used_seats: 0, cost_per_seat: 0, total_cost: 0, billing_cycle: 'Mensal', start_date: '', end_date: '', status: 'Ativa', notes: '' });
   const [editForm, setEditForm] = useState({ id: '', name: '', vendor_name: '', license_type: 'Assinatura', category: '', total_seats: 1, used_seats: 0, cost_per_seat: 0, total_cost: 0, billing_cycle: 'Mensal', start_date: '', end_date: '', status: 'Ativa', notes: '', compliance_notes: '' });
 
-  const load = () => { setLoading(true); api.listLicenses().then(setLicenses).finally(() => setLoading(false)); };
+  const load = () => {
+    setLoading(true);
+    api.listLicenses()
+      .then(res => {
+        const withUtil = res.map(l => ({
+          ...l,
+          util: l.total_seats > 0 ? Math.round((l.used_seats / l.total_seats) * 100) : 0
+        }));
+        setLicenses(withUtil);
+      })
+      .finally(() => setLoading(false));
+  };
   useEffect(load, []);
 
   const handleCreate = async () => {
@@ -799,6 +973,14 @@ function Licenses({ user }) {
   const totalSeats = licenses.reduce((s, l) => s + (l.total_seats || 0), 0);
   const usedSeats = licenses.reduce((s, l) => s + (l.used_seats || 0), 0);
 
+  // Calcular desperdício de Overlicensing e riscos de Underlicensing para SAM (ISO/IEC 19770-1)
+  const overlicensingWaste = licenses.reduce((sum, l) => {
+    if (l.total_seats > l.used_seats) {
+      return sum + ((l.total_seats - l.used_seats) * (l.cost_per_seat || 0));
+    }
+    return sum;
+  }, 0);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -810,19 +992,126 @@ function Licenses({ user }) {
         <KpiCard icon={Users} label="Licencas em Uso" value={`${usedSeats} / ${totalSeats}`} sub={`${totalSeats > 0 ? ((usedSeats / totalSeats) * 100).toFixed(0) : 0}% utilizado`} color="blue" />
         <KpiCard icon={AlertTriangle} label="Expirando" value={licenses.filter(l => l.status === 'Expirando').length} color="amber" />
       </div>
+
+      {/* SAM Summary Panel (ISO/IEC 19770) */}
+      {!loading && licenses.length > 0 && (
+        <div className="bg-slate-800/40 rounded-xl p-5 ring-1 ring-slate-700/60 space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-700/50 pb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400">
+                <Shield size={16} />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-white">Gestão de Ativos de Software (SAM)</h2>
+                <p className="text-slate-400 text-[11px] mt-0.5">Alinhamento com a Norma Internacional ISO/IEC 19770-1</p>
+              </div>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-700/60 text-blue-400 uppercase tracking-wider">ISO 19770-1</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Progress bar showing overall utilization */}
+            <div className="bg-slate-900/30 rounded-lg p-4 border border-slate-800 space-y-2 flex flex-col justify-center">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-slate-400">Utilização Geral de Seats</span>
+                <span className="text-white font-medium">
+                  {usedSeats} de {totalSeats} ({totalSeats > 0 ? ((usedSeats / totalSeats) * 100).toFixed(1) : 0}%)
+                </span>
+              </div>
+              <div className="h-2.5 bg-slate-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    usedSeats > totalSeats ? 'bg-red-500' : (usedSeats / totalSeats) > 0.9 ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${Math.min(totalSeats > 0 ? (usedSeats / totalSeats) * 100 : 0, 100)}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">
+                Métrica consolidada de licenças contratadas vs. alocadas aos ativos.
+              </p>
+            </div>
+
+            {/* Overlicensing / Underlicensing Alerts */}
+            <div className="space-y-3 flex flex-col justify-center">
+              {/* Overlicensing Waste Alert */}
+              {totalSeats > usedSeats && overlicensingWaste > 0 && (
+                <div className="flex gap-3 bg-amber-500/10 text-amber-300 rounded-lg p-3.5 border border-amber-500/20 text-xs">
+                  <AlertTriangle className="shrink-0 text-amber-400" size={16} />
+                  <div>
+                    <span className="font-semibold block text-amber-400">Otimização de Custos (Overlicensing)</span>
+                    <p className="mt-0.5 leading-relaxed text-slate-300">
+                      Você possui <strong className="text-amber-400">{totalSeats - usedSeats}</strong> licenças ociosas. 
+                      Desperdício financeiro estimado: <strong className="text-amber-400">{fmt(overlicensingWaste)}</strong> por ciclo. Considere reduzir o plano.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Underlicensing Risco Legal Warning */}
+              {usedSeats > totalSeats && (
+                <div className="flex gap-3 bg-red-500/10 text-red-300 rounded-lg p-3.5 border border-red-500/20 text-xs">
+                  <XCircle className="shrink-0 text-red-400" size={16} />
+                  <div>
+                    <span className="font-semibold block text-red-400">Risco Legal & Compliance (Underlicensing)</span>
+                    <p className="mt-0.5 leading-relaxed text-slate-300">
+                      Há <strong className="text-red-400">{usedSeats - totalSeats}</strong> seats em uso acima do limite contratado geral.
+                      Isso viola a conformidade da <strong>ISO/IEC 19770-1</strong> e expõe a empresa a riscos de auditoria e multas!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* In compliance message if totalSeats === usedSeats */}
+              {totalSeats > 0 && totalSeats === usedSeats && (
+                <div className="flex gap-3 bg-emerald-500/10 text-emerald-300 rounded-lg p-3.5 border border-emerald-500/20 text-xs">
+                  <CheckCircle2 className="shrink-0 text-emerald-400" size={16} />
+                  <div>
+                    <span className="font-semibold block text-emerald-400">Conformidade Perfeita</span>
+                    <p className="mt-0.5 leading-relaxed text-slate-300">
+                      100% de eficiência. Todos os seats contratados estão alocados, garantindo zero desperdício e compliance total de conformidade.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? <Loading /> : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {licenses.map(l => (
             <div key={l.id} className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50 hover:bg-slate-800/80 transition">
-              <div className="flex items-start justify-between mb-3">
-                <div><h3 className="text-white font-semibold">{l.name}</h3><p className="text-slate-500 text-xs mt-0.5">{l.vendor_name || 'Sem fornecedor'} &middot; {l.license_type}</p></div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${LIC_COLOR[l.status] || 'bg-slate-600 text-slate-300'}`}>{l.status}</span>
+              <div className="flex items-start justify-between mb-2">
+                <div>
+                  <h3 className="text-white font-semibold">{l.name}</h3>
+                  <p className="text-slate-500 text-xs mt-0.5">{l.vendor_name || 'Sem fornecedor'} &middot; {l.license_type}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => setSelectedLicenseId(l.id)} title="Visualizar" className="text-slate-500 hover:text-blue-400 transition"><Eye size={14} /></button>
                   <button onClick={() => handleOpenEdit(l)} title="Editar" className="text-slate-500 hover:text-amber-400 transition"><Edit3 size={14} /></button>
                   <button onClick={() => handleDelete(l.id)} title="Excluir" className="text-slate-500 hover:text-red-400 transition"><Trash2 size={14} /></button>
                 </div>
               </div>
+
+              {/* Badges de Compliance Individual */}
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${LIC_COLOR[l.status] || 'bg-slate-600 text-slate-300'}`}>{l.status}</span>
+                {l.used_seats > l.total_seats ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400 ring-1 ring-red-500/30">
+                    Sublicenciado (-{l.used_seats - l.total_seats})
+                  </span>
+                ) : l.used_seats < l.total_seats ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/30">
+                    Sobrando ({l.total_seats - l.used_seats})
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30">
+                    Em conformidade
+                  </span>
+                )}
+              </div>
+
               <div className="mb-3">
                 <div className="flex justify-between text-xs text-slate-400 mb-1"><span>{l.used_seats} de {l.total_seats} licencas</span><span>{l.util}%</span></div>
                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${l.util > 90 ? 'bg-amber-500' : 'bg-blue-500'}`} style={{ width: `${Math.min(l.util, 100)}%` }} /></div>
@@ -2591,9 +2880,11 @@ const NAV = [
   { key: 'assets', label: 'Ativos', icon: Monitor },
   { key: 'telecom', label: 'Linhas Móveis', icon: Smartphone },
   { key: 'licenses', label: 'Licencas', icon: FileKey },
+  { key: 'contracts', label: 'Contratos', icon: Briefcase },
   { key: 'budget', label: 'Orcamento', icon: DollarSign },
   { key: 'inventories', label: 'Inventarios', icon: ClipboardCheck },
   { key: 'summary', label: 'Resumo', icon: Package },
+  { key: 'knowledge', label: 'Guia & Governança', icon: BookOpen },
   { key: 'users', label: 'Usuários', icon: Users },
 ];
 
@@ -2766,11 +3057,423 @@ function UsersPage() {
   );
 }
 
+/* ═══════════ GUIA & GOVERNANÇA (KNOWLEDGE) ═══════════ */
+function KnowledgePage() {
+  const [activeSubTab, setActiveSubTab] = useState('itam');
+  
+  const sections = {
+    itam: {
+      title: 'Gestão de Ativos de Hardware (ITAM)',
+      frameworks: ['ITIL v4 ITAM', 'COBIT 2019 (BAI09 - Manage Assets)', 'ISO/IEC 27001'],
+      icon: Monitor,
+      desc: 'Processo sistemático de gerenciamento do ciclo de vida físico e financeiro de dispositivos eletrônicos da empresa.',
+      advantages: [
+        { title: 'Controle de PC Refresh', text: 'Previsibilidade orçamentária sabendo exatamente quais computadores estão no fim de sua vida útil (ex: 60 meses).' },
+        { title: 'Gestão de Depreciação', text: 'Cálculo automatizado do Valor Atual e Depreciação Acumulada, ideal para planejamento contábil e dedução tributária.' },
+        { title: 'Rastreabilidade de Histórico', text: 'Auditoria completa de quem usou o dispositivo, por qual departamento passou e onde está localizado fisicamente.' },
+        { title: 'Prevenção de Perdas', text: 'Vínculo rígido de termos de responsabilidade (gerados e armazenados) com assinaturas de recebimento dos portadores.' }
+      ],
+      utilization: 'Utilize para cadastrar notebooks, celulares, switches, servidores e monitores. Monitore o status (Em Manutenção, Inativo, Ativo) e registre manutenções corretivas ou preventivas.'
+    },
+    tem: {
+      title: 'Telecom Expense Management (TEM)',
+      frameworks: ['ITIL Financial Management', 'COBIT 2019 (APO06 - Budget)', 'ITIL Service Configuration'],
+      icon: Smartphone,
+      desc: 'Gestão de despesas e inventário de conectividade móvel (linhas telefônicas corporativas e SIM chips).',
+      advantages: [
+        { title: 'Detecção de Contas "Fantasma"', text: 'Identifique rapidamente chips ativos sem portador atribuído, cortando custos recorrentes imediatamente.' },
+        { title: 'Auditoria de Fatura Automatizada', text: 'Importe faturas e cruze os valores cobrados com o inventário, anotando comentários rápidos de divergência na conciliação.' },
+        { title: 'Sincronização MDM/Pulsus', text: 'Garante que cada linha telefônica móvel está vinculada a um smartphone cadastrado e sob o controle do MDM Pulsus.' }
+      ],
+      utilization: 'Utilize para inventariar linhas corporativas, gerenciar planos de dados contratados, rodar auditorias mensais de faturas da Vivo/Claro e monitorar de forma centralizada os gastos mensais de telecom.'
+    },
+    sam: {
+      title: 'Software Asset Management (SAM)',
+      frameworks: ['ISO/IEC 19770 (SAM)', 'ITIL SAM', 'ISO 27001 A.8'],
+      icon: FileKey,
+      desc: 'Boas práticas para controle, proteção e otimização das licenças e assinaturas de softwares corporativos (SaaS e On-Premises).',
+      advantages: [
+        { title: 'Mitigação de Risco de Auditoria', text: 'Evite multas milionárias de fabricantes (Microsoft, Adobe, SAP) detectando imediatamente o uso acima do limite licenciado.' },
+        { title: 'Corte de Desperdício (Overlicensing)', text: 'Identifique assinaturas ativas sem atribuição a usuários e reduza despesas de licenças ociosas.' },
+        { title: 'Gestão de Expirabilidade', text: 'Acompanhe datas de vigência de licenças SaaS e evite suspensão repentina de serviços essenciais.' }
+      ],
+      utilization: 'Registre licenças compradas, chaves de ativação, valores por assento e associe as licenças aos respectivos computadores/usuários para obter gráficos em tempo real de conformidade.'
+    },
+    governance: {
+      title: 'Segurança, LGPD & Contratos',
+      frameworks: ['LGPD (Lei Geral de Proteção de Dados)', 'ISO/IEC 27001', 'ITIL Contract & Supplier Management'],
+      icon: Shield,
+      desc: 'Garantia de conformidade legal, termos jurídicos assinados e processos de descarte ecológico seguro de ativos.',
+      advantages: [
+        { title: 'Sanitização de Mídias (Wiping)', text: 'Checklist obrigatório de higienização de discos rígidos em descartes, evitando vazamentos de segredos industriais ou dados pessoais (LGPD).' },
+        { title: 'Governança Contratual e SLAs', text: 'Controle de vigência de contratos de provedores com alertas de vencimento em 60 dias e registros de metas de SLA.' },
+        { title: 'Termo de Responsabilidade Seguro', text: 'Automatize a geração de documentos para assinatura física ou digital, vinculando de forma legal o ativo ao seu responsável.' }
+      ],
+      utilization: 'Utilize o módulo de Contratos para gerenciar parcerias, fornecedores de nuvem, link de internet e suporte técnico. Monitore o processo de pós-desativação ao inativar equipamentos antigos.'
+    }
+  };
+
+  const active = sections[activeSubTab];
+  const ActiveIcon = active.icon;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Guia de Governança & Frameworks de TI</h1>
+          <p className="text-slate-400 text-sm">Entenda os conceitos internacionais e as melhores práticas aplicadas nas telas do IT-Manager.</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-700/50 overflow-x-auto gap-2">
+        {Object.entries(sections).map(([key, sec]) => {
+          const SecIcon = sec.icon;
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveSubTab(key)}
+              className={`flex items-center gap-2 px-4 py-3 border-b-2 text-sm font-semibold transition shrink-0 ${
+                activeSubTab === key
+                  ? 'border-blue-500 text-blue-400 bg-blue-500/5'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <SecIcon size={16} />
+              {sec.title.split(' (')[0]}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Content grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-600/20 rounded-xl text-blue-400"><ActiveIcon size={24} /></div>
+              <div>
+                <h2 className="text-xl font-bold text-white">{active.title}</h2>
+                <p className="text-slate-400 text-sm">{active.desc}</p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-700/30">
+              <h3 className="text-white font-semibold text-sm mb-3">Vantagens & Benefícios de Governança:</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {active.advantages.map((adv, idx) => (
+                  <div key={idx} className="bg-slate-900/40 p-4 border border-slate-800 rounded-lg hover:border-slate-700 transition">
+                    <p className="text-white font-semibold text-xs mb-1 flex items-center gap-1.5 text-blue-400">
+                      <CheckCircle2 size={12} className="text-emerald-400 shrink-0" /> {adv.title}
+                    </p>
+                    <p className="text-slate-400 text-xs leading-relaxed">{adv.text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6">
+            <h3 className="text-white font-semibold text-sm mb-2">Como utilizar operacionalmente no sistema:</h3>
+            <p className="text-slate-300 text-xs leading-relaxed bg-slate-900/30 p-4 border border-slate-800 rounded-lg">{active.utilization}</p>
+          </div>
+        </div>
+
+        {/* Sidebar Info */}
+        <div className="space-y-6">
+          <div className="bg-gradient-to-br from-blue-900/20 to-slate-800/40 border border-blue-500/20 rounded-xl p-6 space-y-4">
+            <h3 className="text-blue-400 font-bold text-sm flex items-center gap-1.5"><Shield size={16} /> Conformidade & Metodologias</h3>
+            <p className="text-slate-400 text-xs leading-relaxed">
+              O IT-Manager foi projetado com alinhamento rigoroso a frameworks internacionais. Este módulo está em conformidade com:
+            </p>
+            <div className="space-y-2 pt-2">
+              {active.frameworks.map((fw, idx) => (
+                <div key={idx} className="flex items-center gap-2 bg-slate-900/60 px-3 py-2 border border-slate-800 rounded-lg text-white text-xs font-medium">
+                  <div className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
+                  {fw}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6 space-y-3">
+            <h3 className="text-white font-semibold text-sm">Status de Governança</h3>
+            <div className="text-slate-400 text-xs space-y-2 leading-relaxed">
+              <p>🎯 **Foco**: Otimização Financeira, Gestão de Riscos, Rastreabilidade.</p>
+              <p>🔒 **Segurança**: Auditorias em conformidade com as seções A.8 da **ISO 27001**.</p>
+              <p>📄 **Legal**: Guarda legal e proteção de termos em consonância com a **LGPD**.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════ CONTRACTS & SLA MANAGEMENT ═══════════ */
+function ContractsPage() {
+  const [contracts, setContracts] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [form, setForm] = useState({ name: '', vendor_id: '', contract_number: '', start_date: '', end_date: '', monthly_cost: '', sla_details: '', document_url: '', status: 'Ativo', notes: '' });
+  const [editForm, setEditForm] = useState({ id: '', name: '', vendor_id: '', contract_number: '', start_date: '', end_date: '', monthly_cost: '', sla_details: '', document_url: '', status: 'Ativo', notes: '' });
+
+  const load = () => {
+    setLoading(true);
+    api.listContracts().then(setContracts).finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    api.vendors().then(setVendors).catch(() => {});
+  }, []);
+
+  const handleCreate = async () => {
+    try {
+      await api.createContract({ ...form, monthly_cost: Number(form.monthly_cost) || 0 });
+      setShowModal(false);
+      setForm({ name: '', vendor_id: '', contract_number: '', start_date: '', end_date: '', monthly_cost: '', sla_details: '', document_url: '', status: 'Ativo', notes: '' });
+      load();
+    } catch (err) {
+      alert("Erro ao criar contrato: " + err.message);
+    }
+  };
+
+  const handleOpenEdit = (c) => {
+    setEditForm({
+      id: c.id,
+      name: c.name || '',
+      vendor_id: c.vendor_id || '',
+      contract_number: c.contract_number || '',
+      start_date: c.start_date || '',
+      end_date: c.end_date || '',
+      monthly_cost: c.monthly_cost || 0,
+      sla_details: c.sla_details || '',
+      document_url: c.document_url || '',
+      status: c.status || 'Ativo',
+      notes: c.notes || ''
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async () => {
+    try {
+      await api.updateContract(editForm.id, { ...editForm, monthly_cost: Number(editForm.monthly_cost) || 0 });
+      setShowEditModal(false);
+      load();
+    } catch (err) {
+      alert("Erro ao atualizar contrato: " + err.message);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm("Deseja realmente remover este contrato?")) return;
+    try {
+      await api.deleteContract(id);
+      load();
+    } catch (err) {
+      alert("Erro ao excluir: " + err.message);
+    }
+  };
+
+  const getDaysLeft = (endDateStr) => {
+    if (!endDateStr) return null;
+    const diff = new Date(endDateStr) - new Date();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  };
+
+  const expiringContracts = contracts.filter(c => {
+    if (c.status !== 'Ativo') return false;
+    const days = getDaysLeft(c.end_date);
+    return days !== null && days <= 60 && days >= 0;
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* Expirability alert banner */}
+      {expiringContracts.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="text-amber-400 shrink-0 mt-0.5" size={20} />
+          <div>
+            <h3 className="text-amber-400 font-bold text-sm">Alerta de Expirabilidade de Contratos</h3>
+            <p className="text-slate-300 text-xs leading-relaxed mt-1">
+              Os seguintes contratos vencem em menos de **60 dias** e requerem renovação ou negociação de SLA:
+            </p>
+            <ul className="list-disc pl-4 mt-2 text-xs text-slate-400 space-y-1">
+              {expiringContracts.map(c => {
+                const days = getDaysLeft(c.end_date);
+                return (
+                  <li key={c.id}>
+                    <span className="text-white font-medium">{c.name}</span> (nº {c.contract_number}) - Vence em{' '}
+                    <span className="text-amber-400 font-bold">{days} dias</span> ({fmtDate(c.end_date)})
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Contratos & SLAs de Fornecedores</h1>
+          <p className="text-slate-400 text-sm">Gerenciamento centralizado de contratos de TI, licenças SaaS, links e serviços com fornecedores.</p>
+        </div>
+        <button onClick={() => setShowModal(true)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition shrink-0">
+          <Plus size={18} /> Adicionar Contrato
+        </button>
+      </div>
+
+      {loading ? <Loading /> : (
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-700 text-slate-400 text-left">
+                  <th className="px-4 py-3 font-medium">Contrato</th>
+                  <th className="px-4 py-3 font-medium">Nº Contrato</th>
+                  <th className="px-4 py-3 font-medium">Fornecedor</th>
+                  <th className="px-4 py-3 font-medium">Custo Mensal</th>
+                  <th className="px-4 py-3 font-medium">Vigência</th>
+                  <th className="px-4 py-3 font-medium">Situação / Expirabilidade</th>
+                  <th className="px-4 py-3 font-medium">Doc</th>
+                  <th className="px-4 py-3 font-medium text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {contracts.map(c => {
+                  const days = getDaysLeft(c.end_date);
+                  let expBadge = null;
+                  if (c.status === 'Ativo') {
+                    if (days !== null) {
+                      if (days < 0) {
+                        expBadge = <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-bold text-[10px]">Vencido</span>;
+                      } else if (days <= 60) {
+                        expBadge = <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold text-[10px]">Faltam {days} dias</span>;
+                      } else {
+                        expBadge = <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px]">Regular</span>;
+                      }
+                    }
+                  } else {
+                    expBadge = <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-400 text-[10px]">Inativo</span>;
+                  }
+
+                  return (
+                    <tr key={c.id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition">
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-white font-medium">{c.name}</p>
+                          <p className="text-slate-500 text-xs max-w-xs truncate">{c.sla_details || 'Sem especificações de SLA'}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">{c.contract_number || '-'}</td>
+                      <td className="px-4 py-3 text-slate-300">{c.vendor_name || '-'}</td>
+                      <td className="px-4 py-3 text-slate-300 font-medium">{fmt(c.monthly_cost)}</td>
+                      <td className="px-4 py-3 text-slate-400 text-xs">
+                        {fmtDate(c.start_date)} até {fmtDate(c.end_date)}
+                      </td>
+                      <td className="px-4 py-3">{expBadge}</td>
+                      <td className="px-4 py-3">
+                        {c.document_url ? (
+                          <a href={c.document_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-semibold transition" title="Visualizar Contrato Anexo">
+                            <FileText size={14} /> PDF/Doc
+                          </a>
+                        ) : (
+                          <span className="text-slate-600 text-xs">Sem anexo</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right flex gap-2 justify-end">
+                        <button onClick={() => handleOpenEdit(c)} title="Editar" className="text-slate-500 hover:text-amber-400 transition"><Edit3 size={16} /></button>
+                        <button onClick={() => handleDelete(c.id)} title="Excluir" className="text-slate-500 hover:text-red-400 transition"><Trash2 size={16} /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {contracts.length === 0 && (
+                  <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-500">Nenhum contrato cadastrado</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Create Modal */}
+      <Modal open={showModal} onClose={() => setShowModal(false)} title="Novo Contrato">
+        <div className="grid grid-cols-2 gap-x-3">
+          <Input label="Nome do Contrato *" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Ex: Licenciamento Microsoft Enterprise Agreement" />
+          <Input label="Número do Contrato" value={form.contract_number} onChange={e => setForm({ ...form, contract_number: e.target.value })} placeholder="Ex: CT-2026-987" />
+          <label className="block mb-3">
+            <span className="text-sm text-slate-400 mb-1 block">Fornecedor *</span>
+            <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={form.vendor_id} onChange={e => setForm({ ...form, vendor_id: e.target.value })}>
+              <option value="">Selecione</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </label>
+          <Input label="Custo Mensal (R$)" type="number" value={form.monthly_cost} onChange={e => setForm({ ...form, monthly_cost: e.target.value })} placeholder="Ex: 12500" />
+          <Input label="Data Inicial" type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} />
+          <Input label="Data Final" type="date" value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} />
+          <Select label="Status" options={['Ativo', 'Inativo']} value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} />
+          <div className="col-span-2">
+            <TextArea label="Especificações de SLA / Metas" value={form.sla_details} onChange={e => setForm({ ...form, sla_details: e.target.value })} placeholder="Ex: Disponibilidade de links 99.9%, tempo de resposta de 4 horas para incidentes críticos." />
+          </div>
+          <div className="col-span-2">
+            <TextArea label="Observações / Notas" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Ex: Aditivo firmado em maio para acréscimo de banda." />
+          </div>
+          <div className="col-span-2">
+            <ImageUpload label="Anexar Cópia do Contrato (PDF ou Imagem)" value={form.document_url} onChange={val => setForm({ ...form, document_url: val })} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-4">
+          <button onClick={() => setShowModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
+          <button onClick={handleCreate} disabled={!form.name} className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition">Criar Contrato</button>
+        </div>
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal open={showEditModal} onClose={() => setShowEditModal(false)} title="Editar Contrato">
+        <div className="grid grid-cols-2 gap-x-3">
+          <Input label="Nome do Contrato *" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+          <Input label="Número do Contrato" value={editForm.contract_number} onChange={e => setEditForm({ ...editForm, contract_number: e.target.value })} />
+          <label className="block mb-3">
+            <span className="text-sm text-slate-400 mb-1 block">Fornecedor *</span>
+            <select className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={editForm.vendor_id} onChange={e => setEditForm({ ...editForm, vendor_id: e.target.value })}>
+              <option value="">Selecione</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </label>
+          <Input label="Custo Mensal (R$)" type="number" value={editForm.monthly_cost} onChange={e => setEditForm({ ...editForm, monthly_cost: e.target.value })} />
+          <Input label="Data Inicial" type="date" value={editForm.start_date} onChange={e => setEditForm({ ...editForm, start_date: e.target.value })} />
+          <Input label="Data Final" type="date" value={editForm.end_date} onChange={e => setEditForm({ ...editForm, end_date: e.target.value })} />
+          <Select label="Status" options={['Ativo', 'Inativo']} value={editForm.status} onChange={e => setEditForm({ ...editForm, status: e.target.value })} />
+          <div className="col-span-2">
+            <TextArea label="Especificações de SLA / Metas" value={editForm.sla_details} onChange={e => setEditForm({ ...editForm, sla_details: e.target.value })} />
+          </div>
+          <div className="col-span-2">
+            <TextArea label="Observações / Notas" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} />
+          </div>
+          <div className="col-span-2">
+            <ImageUpload label="Anexar Cópia do Contrato (PDF ou Imagem)" value={editForm.document_url} onChange={val => setEditForm({ ...editForm, document_url: val })} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-4">
+          <button onClick={() => setShowEditModal(false)} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
+          <button onClick={handleEditSave} disabled={!editForm.name} className="px-4 py-2 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-medium transition">Salvar Alterações</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 export default function App() {
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [expiringContractsAlert, setExpiringContractsAlert] = useState([]);
+  const [showExpiringModal, setShowExpiringModal] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('it_manager_token');
@@ -2778,6 +3481,24 @@ export default function App() {
       api.me().then(setUser).catch(() => localStorage.removeItem('it_manager_token')).finally(() => setAuthLoading(false));
     } else { setAuthLoading(false); }
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      api.listContracts().then(data => {
+        const expiring = data.filter(c => {
+          if (c.status !== 'Ativo') return false;
+          if (!c.end_date) return false;
+          const diff = new Date(c.end_date) - new Date();
+          const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+          return days <= 60 && days >= 0;
+        });
+        if (expiring.length > 0) {
+          setExpiringContractsAlert(expiring);
+          setShowExpiringModal(true);
+        }
+      }).catch(() => {});
+    }
+  }, [user]);
 
   if (authLoading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="w-12 h-12 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div></div>;
   if (!user) return <Login onLogin={setUser} />;
@@ -2790,9 +3511,11 @@ export default function App() {
       case 'assets': return <Assets user={user} />;
       case 'telecom': return <TelecomPage user={user} />;
       case 'licenses': return <Licenses user={user} />;
+      case 'contracts': return <ContractsPage />;
       case 'budget': return <Budget />;
       case 'inventories': return <Inventories />;
       case 'summary': return <InventorySummary />;
+      case 'knowledge': return <KnowledgePage />;
       case 'users': return user && user.role === 'admin' ? <UsersPage /> : <Dashboard />;
       default: return <Dashboard />;
     }
@@ -2834,6 +3557,41 @@ export default function App() {
         </header>
         <div className="p-4 lg:p-6">{renderPage()}</div>
       </main>
+
+      {/* Modal de Alerta de Vencimento de Contratos */}
+      <Modal open={showExpiringModal} onClose={() => setShowExpiringModal(false)} title="Alerta de Vencimento de Contrato">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 text-amber-400">
+            <AlertTriangle size={24} />
+            <h3 className="font-bold text-base">Contratos Próximos do Vencimento!</h3>
+          </div>
+          <p className="text-slate-300 text-xs leading-relaxed">
+            Detectamos contratos vigentes ativos com vencimento programado para os **próximos 60 dias**. Por favor, revise as condições de renovação e SLAs:
+          </p>
+          <div className="space-y-2 max-h-48 overflow-y-auto pt-2">
+            {expiringContractsAlert.map(c => {
+              const diff = new Date(c.end_date) - new Date();
+              const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+              return (
+                <div key={c.id} className="bg-slate-900/60 p-3 border border-slate-800 rounded-lg flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-white font-semibold text-xs">{c.name}</h4>
+                    <p className="text-slate-500 text-[10px]">Contrato nº {c.contract_number || '-'}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-amber-400 font-bold text-xs">Faltam {days} dias</p>
+                    <p className="text-slate-400 text-[9px]">{fmtDate(c.end_date)}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-5">
+          <button onClick={() => { setShowExpiringModal(false); setPage('contracts'); }} className="px-4 py-2 rounded-lg text-xs bg-blue-600 hover:bg-blue-700 text-white font-medium transition">Revisar Contratos</button>
+          <button onClick={() => setShowExpiringModal(false)} className="px-4 py-2 rounded-lg text-xs text-slate-400 hover:text-white transition">Fechar</button>
+        </div>
+      </Modal>
     </div>
   );
 }

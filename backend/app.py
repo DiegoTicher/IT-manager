@@ -61,12 +61,12 @@ def init_db():
     db.executescript("""
     CREATE TABLE IF NOT EXISTS departments (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, manager TEXT, cost_center TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS vendors (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT, email TEXT, phone TEXT, website TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
-    CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, serial_number TEXT UNIQUE, asset_tag TEXT UNIQUE, brand TEXT, model TEXT, specifications TEXT, purchase_date TEXT, warranty_end TEXT, cost REAL DEFAULT 0, residual_value REAL DEFAULT 0, useful_life_months INTEGER DEFAULT 60, status TEXT DEFAULT 'Ativo', condition TEXT DEFAULT 'Bom', assigned_to TEXT, department_id TEXT REFERENCES departments(id), location TEXT, vendor_id TEXT REFERENCES vendors(id), notes TEXT, image_url TEXT, pulsus_number TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, serial_number TEXT UNIQUE, asset_tag TEXT UNIQUE, brand TEXT, model TEXT, specifications TEXT, purchase_date TEXT, warranty_end TEXT, cost REAL DEFAULT 0, residual_value REAL DEFAULT 0, useful_life_months INTEGER DEFAULT 60, status TEXT DEFAULT 'Ativo', condition TEXT DEFAULT 'Bom', assigned_to TEXT, department_id TEXT REFERENCES departments(id), location TEXT, vendor_id TEXT REFERENCES vendors(id), notes TEXT, image_url TEXT, pulsus_number TEXT, deactivation_wiped INTEGER DEFAULT 0, deactivation_eco_recycle INTEGER DEFAULT 0, deactivation_document_url TEXT, deactivation_notes TEXT, responsibility_term_url TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS licenses (id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor_id TEXT REFERENCES vendors(id), vendor_name TEXT, license_type TEXT DEFAULT 'Assinatura', category TEXT, license_key TEXT, total_seats INTEGER DEFAULT 1, used_seats INTEGER DEFAULT 0, cost_per_seat REAL DEFAULT 0, total_cost REAL DEFAULT 0, billing_cycle TEXT DEFAULT 'Mensal', start_date TEXT, end_date TEXT, auto_renew INTEGER DEFAULT 0, status TEXT DEFAULT 'Ativa', compliance_notes TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS asset_licenses (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, assigned_at TEXT DEFAULT (datetime('now')), UNIQUE(asset_id, license_id));
     CREATE TABLE IF NOT EXISTS budget (id TEXT PRIMARY KEY, year INTEGER NOT NULL, month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12), category TEXT NOT NULL, planned REAL DEFAULT 0, actual REAL DEFAULT 0, notes TEXT, created_at TEXT DEFAULT (datetime('now')), UNIQUE(year, month, category));
     CREATE TABLE IF NOT EXISTS asset_history (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
-    CREATE TABLE IF NOT EXISTS maintenance (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, type TEXT, description TEXT, vendor TEXT, cost REAL DEFAULT 0, start_date TEXT, end_date TEXT, status TEXT DEFAULT 'Aberta', notes TEXT, created_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS maintenance (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, type TEXT, description TEXT, vendor TEXT, cost REAL DEFAULT 0, start_date TEXT, end_date TEXT, status TEXT DEFAULT 'Aberta', notes TEXT, image_url TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS inventories (id TEXT PRIMARY KEY, name TEXT NOT NULL, year INTEGER NOT NULL, month INTEGER NOT NULL, status TEXT DEFAULT 'Aberto', responsible TEXT, notes TEXT, started_at TEXT DEFAULT (datetime('now')), closed_at TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS inventory_items (id TEXT PRIMARY KEY, inventory_id TEXT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, status TEXT DEFAULT 'Pendente', checked_by TEXT, checked_at TEXT, location_found TEXT, condition_found TEXT, notes TEXT, image_url TEXT, UNIQUE(inventory_id, asset_id));
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT DEFAULT 'admin', token TEXT, created_at TEXT DEFAULT (datetime('now')));
@@ -89,6 +89,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_mlh_line ON mobile_lines_history(mobile_line_id);
     CREATE TABLE IF NOT EXISTS licenses_history (id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE INDEX IF NOT EXISTS idx_lh_license ON licenses_history(license_id);
+    CREATE TABLE IF NOT EXISTS contracts (id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor_id TEXT REFERENCES vendors(id), contract_number TEXT, start_date TEXT, end_date TEXT, monthly_cost REAL DEFAULT 0, sla_details TEXT, document_url TEXT, status TEXT DEFAULT 'Ativo', notes TEXT, created_at TEXT DEFAULT (datetime('now')));
+    CREATE INDEX IF NOT EXISTS idx_c_end ON contracts(end_date);
     """)
     # Migracao simples para bases existentes
     try:
@@ -96,6 +98,24 @@ def init_db():
     except: pass
     try:
         db.execute("ALTER TABLE assets ADD COLUMN pulsus_number TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE assets ADD COLUMN deactivation_wiped INTEGER DEFAULT 0")
+    except: pass
+    try:
+        db.execute("ALTER TABLE assets ADD COLUMN deactivation_eco_recycle INTEGER DEFAULT 0")
+    except: pass
+    try:
+        db.execute("ALTER TABLE assets ADD COLUMN deactivation_document_url TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE assets ADD COLUMN deactivation_notes TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE assets ADD COLUMN responsibility_term_url TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE maintenance ADD COLUMN image_url TEXT")
     except: pass
     try:
         db.execute("ALTER TABLE inventory_items ADD COLUMN image_url TEXT")
@@ -417,7 +437,9 @@ def update_asset(aid):
         "name", "category", "serial_number", "asset_tag", "brand", 
         "model", "status", "condition", "assigned_to", "department_id", 
         "location", "cost", "notes", "image_url", "purchase_date", 
-        "warranty_end", "residual_value", "useful_life_months", "vendor_id", "pulsus_number"
+        "warranty_end", "residual_value", "useful_life_months", "vendor_id", "pulsus_number",
+        "deactivation_wiped", "deactivation_eco_recycle", "deactivation_document_url", "deactivation_notes",
+        "responsibility_term_url"
     ]
 
     field_labels = {
@@ -440,7 +462,12 @@ def update_asset(aid):
         "residual_value": "Valor Residual",
         "useful_life_months": "Vida Útil (meses)",
         "vendor_id": "Fornecedor",
-        "pulsus_number": "Nº do Pulsus"
+        "pulsus_number": "Nº do Pulsus",
+        "deactivation_wiped": "Sanitização de Dados (Wiping)",
+        "deactivation_eco_recycle": "Descarte Ecológico",
+        "deactivation_document_url": "Laudo de Desativação",
+        "deactivation_notes": "Justificativa de Desativação",
+        "responsibility_term_url": "Termo de Responsabilidade"
     }
 
     # Detecta mudancas para logar no historico
@@ -555,8 +582,8 @@ def add_asset_comment(aid):
 @auth_required
 def create_maintenance(aid):
     d = request.json; mid = gen_id()
-    execute_db("INSERT INTO maintenance(id,asset_id,type,description,vendor,cost,start_date,end_date,status,notes) VALUES(?,?,?,?,?,?,?,?,?,?)",
-               (mid, aid, d.get("type","Corretiva"), d.get("description",""), d.get("vendor",""), d.get("cost",0), d.get("start_date",""), d.get("end_date"), d.get("status","Aberta"), d.get("notes","")))
+    execute_db("INSERT INTO maintenance(id,asset_id,type,description,vendor,cost,start_date,end_date,status,notes,image_url) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+               (mid, aid, d.get("type","Corretiva"), d.get("description",""), d.get("vendor",""), d.get("cost",0), d.get("start_date",""), d.get("end_date"), d.get("status","Aberta"), d.get("notes",""), d.get("image_url")))
     log_asset_history(aid, "Manutencao Aberta", None, d.get("type","Corretiva"), d.get("performed_by","Sistema"), d.get("description",""))
     # Auto muda status do ativo para Em Manutencao
     if d.get("auto_status", True):
@@ -587,6 +614,8 @@ def update_maintenance(mid):
 @auth_required
 def list_licenses():
     items=query_db("SELECT * FROM licenses ORDER BY end_date ASC")
+    for license in items:
+        license["util"] = round(license["used_seats"] / license["total_seats"] * 100, 1) if license["total_seats"] > 0 else 0
     return success(items)
 
 @app.route("/api/licenses/<lid>", methods=["GET"])
@@ -860,7 +889,7 @@ def upload_file():
     file = request.files['file']
     if file.filename == '': return error("Nenhum arquivo selecionado")
     ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ['jpg','jpeg','png','gif','webp']: return error("Formato nao permitido")
+    if ext not in ['jpg','jpeg','png','gif','webp','pdf']: return error("Formato nao permitido")
     fname = f"{uuid.uuid4().hex}.{ext}"
     file.save(os.path.join(app.config['UPLOAD_FOLDER'], fname))
     return success({"url": f"/uploads/{fname}"})
@@ -868,6 +897,43 @@ def upload_file():
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# ─────────── CONTRACTS ───────────
+@app.route("/api/contracts", methods=["GET"])
+@auth_required
+def list_contracts():
+    q = """
+    SELECT c.*, v.name as vendor_name 
+    FROM contracts c 
+    LEFT JOIN vendors v ON c.vendor_id = v.id 
+    ORDER BY c.end_date ASC
+    """
+    return success(query_db(q))
+
+@app.route("/api/contracts", methods=["POST"])
+@auth_required
+def create_contract():
+    d = request.json; cid = gen_id()
+    execute_db("INSERT INTO contracts(id, name, vendor_id, contract_number, start_date, end_date, monthly_cost, sla_details, document_url, status, notes) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+               (cid, d.get("name"), d.get("vendor_id") or None, d.get("contract_number"), d.get("start_date"), d.get("end_date"), float(d.get("monthly_cost", 0) or 0), d.get("sla_details"), d.get("document_url"), d.get("status", "Ativo"), d.get("notes")))
+    return success({"id": cid}, "Contrato criado", 201)
+
+@app.route("/api/contracts/<cid>", methods=["PUT"])
+@auth_required
+def update_contract(cid):
+    d = request.json
+    old = query_db("SELECT * FROM contracts WHERE id=?", [cid], one=True)
+    if not old: return error("Contrato não encontrado", 404)
+    
+    execute_db("UPDATE contracts SET name=?, vendor_id=?, contract_number=?, start_date=?, end_date=?, monthly_cost=?, sla_details=?, document_url=?, status=?, notes=? WHERE id=?",
+               (d.get("name", old["name"]), d.get("vendor_id") or None, d.get("contract_number", old["contract_number"]), d.get("start_date", old["start_date"]), d.get("end_date", old["end_date"]), float(d.get("monthly_cost", old["monthly_cost"]) or 0), d.get("sla_details", old["sla_details"]), d.get("document_url", old["document_url"]), d.get("status", old["status"]), d.get("notes", old["notes"]), cid))
+    return success(message="Contrato atualizado")
+
+@app.route("/api/contracts/<cid>", methods=["DELETE"])
+@auth_required
+def delete_contract(cid):
+    execute_db("DELETE FROM contracts WHERE id=?", [cid])
+    return success(message="Contrato excluído")
 
 # ─────────── TELECOM / MOBILE LINES ───────────
 

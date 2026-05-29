@@ -35,6 +35,11 @@ export const api={
   updateLicense:(id,d)=>req('/licenses/'+id,{method:'PUT',body:d}),
   deleteLicense:(id)=>req('/licenses/'+id,{method:'DELETE'}),
   getLicenseHistory:(id)=>req('/licenses/'+id+'/history'),
+  // Contracts
+  listContracts:()=>req('/contracts'),
+  createContract:(d)=>req('/contracts',{method:'POST',body:d}),
+  updateContract:(id,d)=>req('/contracts/'+id,{method:'PUT',body:d}),
+  deleteContract:(id)=>req('/contracts/'+id,{method:'DELETE'}),
   // Budget
   listBudget:(y)=>req('/budget?year='+(y||new Date().getFullYear())),
   createBudget:(d)=>req('/budget',{method:'POST',body:d}),
