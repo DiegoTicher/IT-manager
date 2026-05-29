@@ -30,8 +30,11 @@ export const api={
   updateMaintenance:(mid,d)=>req('/maintenance/'+mid,{method:'PUT',body:d}),
   // Licenses
   listLicenses:()=>req('/licenses'),
+  getLicense:(id)=>req('/licenses/'+id),
   createLicense:(d)=>req('/licenses',{method:'POST',body:d}),
+  updateLicense:(id,d)=>req('/licenses/'+id,{method:'PUT',body:d}),
   deleteLicense:(id)=>req('/licenses/'+id,{method:'DELETE'}),
+  getLicenseHistory:(id)=>req('/licenses/'+id+'/history'),
   // Budget
   listBudget:(y)=>req('/budget?year='+(y||new Date().getFullYear())),
   createBudget:(d)=>req('/budget',{method:'POST',body:d}),
@@ -50,22 +53,67 @@ export const api={
   createUser:(d)=>req('/users',{method:'POST',body:d}),
   deleteUser:(id)=>req('/users/'+id,{method:'DELETE'}),
   uploadImage: async (file) => {
+    const token = localStorage.getItem('it_manager_token');
+    const headers = {};
+    if (token) headers['Authorization'] = token;
+
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch('/api/upload', { method: 'POST', body: formData });
+    const res = await fetch('/api/upload', { method: 'POST', headers, body: formData });
     const data = await res.json();
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
   importAssets: async (file) => {
+    const token = localStorage.getItem('it_manager_token');
+    const headers = {};
+    if (token) headers['Authorization'] = token;
+
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch('/api/assets/import', { method: 'POST', body: formData });
+    const res = await fetch('/api/assets/import', { method: 'POST', headers, body: formData });
     const data = await res.json();
     if (!data.success) throw new Error(data.message);
     return data.data;
   },
   login: (username, password) => req('/auth/login', { method: 'POST', body: { username, password } }),
-  me: () => req('/auth/me')
+  me: () => req('/auth/me'),
+  // Telecom (Mobile Lines & Audits)
+  listMobileLines:(p)=>req('/telecom/lines?'+new URLSearchParams(p)),
+  getMobileLine:(id)=>req('/telecom/lines/'+id),
+  createMobileLine:(d)=>req('/telecom/lines',{method:'POST',body:d}),
+  updateMobileLine:(id,d)=>req('/telecom/lines/'+id,{method:'PUT',body:d}),
+  deleteMobileLine:(id)=>req('/telecom/lines/'+id,{method:'DELETE'}),
+  getMobileLineHistory:(id)=>req('/telecom/lines/'+id+'/history'),
+  addMobileLineComment:(id,d)=>req('/telecom/lines/'+id+'/comments',{method:'POST',body:d}),
+  listTelecomAudits:()=>req('/telecom/audits'),
+  createTelecomAudit:(d)=>req('/telecom/audits',{method:'POST',body:d}),
+  getTelecomAudit:(id)=>req('/telecom/audits/'+id),
+  updateTelecomAuditItem:(aid,itemId,d)=>req('/telecom/audits/'+aid+'/items/'+itemId,{method:'PUT',body:d}),
+  closeTelecomAudit:(aid)=>req('/telecom/audits/'+aid+'/close',{method:'POST'}),
+  importVivoInvoice: async (aid, file) => {
+    const token = localStorage.getItem('it_manager_token');
+    const headers = {};
+    if (token) headers['Authorization'] = token;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`/api/telecom/audits/${aid}/import-vivo`, { method: 'POST', headers, body: formData });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+    return data.data;
+  },
+  importMobileLines: async (file) => {
+    const token = localStorage.getItem('it_manager_token');
+    const headers = {};
+    if (token) headers['Authorization'] = token;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch('/api/telecom/lines/import', { method: 'POST', headers, body: formData });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+    return data.data;
+  }
 };
 export default api;

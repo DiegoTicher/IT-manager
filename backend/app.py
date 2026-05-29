@@ -15,6 +15,7 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", 5000))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def get_db():
     if "db" not in g:
@@ -47,12 +48,20 @@ def log_asset_history(asset_id, action, from_val=None, to_val=None, performed_by
     execute_db("INSERT INTO asset_history(id,asset_id,action,from_value,to_value,performed_by,notes) VALUES(?,?,?,?,?,?,?)",
                (gen_id(), asset_id, action, from_val, to_val, performed_by, notes))
 
+def log_line_history(line_id, action, from_val=None, to_val=None, performed_by=None, notes=None):
+    execute_db("INSERT INTO mobile_lines_history(id,mobile_line_id,action,from_value,to_value,performed_by,notes) VALUES(?,?,?,?,?,?,?)",
+               (gen_id(), line_id, action, from_val, to_val, performed_by, notes))
+
+def log_license_history(license_id, action, from_val=None, to_val=None, performed_by=None, notes=None):
+    execute_db("INSERT INTO licenses_history(id,license_id,action,from_value,to_value,performed_by,notes) VALUES(?,?,?,?,?,?,?)",
+               (gen_id(), license_id, action, from_val, to_val, performed_by, notes))
+
 def init_db():
     db = sqlite3.connect(DATABASE)
     db.executescript("""
     CREATE TABLE IF NOT EXISTS departments (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, manager TEXT, cost_center TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS vendors (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT, email TEXT, phone TEXT, website TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
-    CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, serial_number TEXT UNIQUE, asset_tag TEXT UNIQUE, brand TEXT, model TEXT, specifications TEXT, purchase_date TEXT, warranty_end TEXT, cost REAL DEFAULT 0, residual_value REAL DEFAULT 0, useful_life_months INTEGER DEFAULT 60, status TEXT DEFAULT 'Ativo', condition TEXT DEFAULT 'Bom', assigned_to TEXT, department_id TEXT REFERENCES departments(id), location TEXT, vendor_id TEXT REFERENCES vendors(id), notes TEXT, image_url TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, serial_number TEXT UNIQUE, asset_tag TEXT UNIQUE, brand TEXT, model TEXT, specifications TEXT, purchase_date TEXT, warranty_end TEXT, cost REAL DEFAULT 0, residual_value REAL DEFAULT 0, useful_life_months INTEGER DEFAULT 60, status TEXT DEFAULT 'Ativo', condition TEXT DEFAULT 'Bom', assigned_to TEXT, department_id TEXT REFERENCES departments(id), location TEXT, vendor_id TEXT REFERENCES vendors(id), notes TEXT, image_url TEXT, pulsus_number TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS licenses (id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor_id TEXT REFERENCES vendors(id), vendor_name TEXT, license_type TEXT DEFAULT 'Assinatura', category TEXT, license_key TEXT, total_seats INTEGER DEFAULT 1, used_seats INTEGER DEFAULT 0, cost_per_seat REAL DEFAULT 0, total_cost REAL DEFAULT 0, billing_cycle TEXT DEFAULT 'Mensal', start_date TEXT, end_date TEXT, auto_renew INTEGER DEFAULT 0, status TEXT DEFAULT 'Ativa', compliance_notes TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS asset_licenses (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, assigned_at TEXT DEFAULT (datetime('now')), UNIQUE(asset_id, license_id));
     CREATE TABLE IF NOT EXISTS budget (id TEXT PRIMARY KEY, year INTEGER NOT NULL, month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12), category TEXT NOT NULL, planned REAL DEFAULT 0, actual REAL DEFAULT 0, notes TEXT, created_at TEXT DEFAULT (datetime('now')), UNIQUE(year, month, category));
@@ -61,6 +70,10 @@ def init_db():
     CREATE TABLE IF NOT EXISTS inventories (id TEXT PRIMARY KEY, name TEXT NOT NULL, year INTEGER NOT NULL, month INTEGER NOT NULL, status TEXT DEFAULT 'Aberto', responsible TEXT, notes TEXT, started_at TEXT DEFAULT (datetime('now')), closed_at TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS inventory_items (id TEXT PRIMARY KEY, inventory_id TEXT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, status TEXT DEFAULT 'Pendente', checked_by TEXT, checked_at TEXT, location_found TEXT, condition_found TEXT, notes TEXT, image_url TEXT, UNIQUE(inventory_id, asset_id));
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT DEFAULT 'admin', token TEXT, created_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS mobile_lines (id TEXT PRIMARY KEY, phone_number TEXT UNIQUE NOT NULL, sim_card TEXT UNIQUE, assigned_to TEXT, department_id TEXT REFERENCES departments(id), asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL, plan_name TEXT, monthly_cost REAL DEFAULT 0, status TEXT DEFAULT 'Ativo', notes TEXT, audit_interval_days INTEGER DEFAULT 90, last_audited_at TEXT, pulsus_number TEXT, created_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS telecom_audits (id TEXT PRIMARY KEY, title TEXT NOT NULL, month INTEGER NOT NULL, year INTEGER NOT NULL, status TEXT DEFAULT 'Aberto', created_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS telecom_audit_items (id TEXT PRIMARY KEY, audit_id TEXT REFERENCES telecom_audits(id) ON DELETE CASCADE, mobile_line_id TEXT REFERENCES mobile_lines(id) ON DELETE CASCADE, original_user TEXT, confirmed_user TEXT, is_confirmed INTEGER DEFAULT 0, notes TEXT, updated_at TEXT DEFAULT (datetime('now')), UNIQUE(audit_id, mobile_line_id));
+    CREATE TABLE IF NOT EXISTS mobile_lines_history (id TEXT PRIMARY KEY, mobile_line_id TEXT NOT NULL REFERENCES mobile_lines(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE INDEX IF NOT EXISTS idx_a_cat ON assets(category);
     CREATE INDEX IF NOT EXISTS idx_a_st ON assets(status);
     CREATE INDEX IF NOT EXISTS idx_a_dept ON assets(department_id);
@@ -70,13 +83,35 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_ah_asset ON asset_history(asset_id);
     CREATE INDEX IF NOT EXISTS idx_inv_ym ON inventories(year, month);
     CREATE INDEX IF NOT EXISTS idx_invi_inv ON inventory_items(inventory_id);
+    CREATE INDEX IF NOT EXISTS idx_ml_num ON mobile_lines(phone_number);
+    CREATE INDEX IF NOT EXISTS idx_ta_ym ON telecom_audits(year, month);
+    CREATE INDEX IF NOT EXISTS idx_tai_aud ON telecom_audit_items(audit_id);
+    CREATE INDEX IF NOT EXISTS idx_mlh_line ON mobile_lines_history(mobile_line_id);
+    CREATE TABLE IF NOT EXISTS licenses_history (id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')));
+    CREATE INDEX IF NOT EXISTS idx_lh_license ON licenses_history(license_id);
     """)
     # Migracao simples para bases existentes
     try:
         db.execute("ALTER TABLE assets ADD COLUMN image_url TEXT")
     except: pass
     try:
+        db.execute("ALTER TABLE assets ADD COLUMN pulsus_number TEXT")
+    except: pass
+    try:
         db.execute("ALTER TABLE inventory_items ADD COLUMN image_url TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE mobile_lines ADD COLUMN audit_interval_days INTEGER DEFAULT 90")
+    except: pass
+    try:
+        db.execute("ALTER TABLE mobile_lines ADD COLUMN last_audited_at TEXT")
+    except: pass
+    try:
+        db.execute("ALTER TABLE mobile_lines ADD COLUMN pulsus_number TEXT")
+    except: pass
+    try:
+        db.execute("CREATE TABLE IF NOT EXISTS licenses_history (id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')))")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_lh_license ON licenses_history(license_id)")
     except: pass
 
     # Garante usuário admin padrao admin/admin
@@ -90,7 +125,18 @@ def seed_db():
     db = sqlite3.connect(DATABASE)
     if db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] > 0: db.close(); return
     year = datetime.now().year
-    db.executemany("INSERT INTO departments(id,name,manager,cost_center) VALUES(?,?,?,?)", [("dept_ti","TI","Rafael Souza","CC-100"),("dept_rh","RH","Juliana Alves","CC-200"),("dept_fin","Financeiro","Marcos Pereira","CC-300"),("dept_com","Comercial","Ana Costa","CC-400"),("dept_mkt","Marketing","Maria Santos","CC-500"),("dept_dir","Diretoria","Carlos Mendes","CC-700")])
+    db.executemany("INSERT INTO departments(id,name,manager,cost_center) VALUES(?,?,?,?)", [
+        ("dept_ti","TI","Rafael Souza","CC-100"),
+        ("dept_rh","RH","Juliana Alves","CC-200"),
+        ("dept_fin","Financeiro","Marcos Pereira","CC-300"),
+        ("dept_com","Comercial","Ana Costa","CC-400"),
+        ("dept_mkt","Marketing","Maria Santos","CC-500"),
+        ("dept_dir","Diretoria","Carlos Mendes","CC-700"),
+        ("dept_armazem","Armazém","Gerente de Armazém","CC-800"),
+        ("dept_distribuicao","Distribuição","Gerente de Distribuição","CC-900"),
+        ("dept_apoio_log","Apoio Logístico","Gerente de Apoio Logístico","CC-1000"),
+        ("dept_gente","Gente","Gerente de Gente","CC-1100")
+    ])
     db.executemany("INSERT INTO vendors(id,name,contact,email,phone,website,notes) VALUES(?,?,?,?,?,?,?)", [("vnd_dell","Dell","Suporte","suporte@dell.com","0800-970-3355","dell.com.br",""),("vnd_apple","Apple","Vendas","corp@apple.com","","apple.com/br",""),("vnd_lenovo","Lenovo","Suporte","suporte@lenovo.com","0800-536-6861","lenovo.com",""),("vnd_ms","Microsoft","Licensing","lic@microsoft.com","","microsoft.com",""),("vnd_hp","HP","Suporte","suporte@hp.com","0800-709-7751","hp.com.br","")])
 
     asset_ids = [gen_id() for _ in range(8)]
@@ -144,6 +190,19 @@ def seed_db():
     db.executemany("INSERT INTO budget(id,year,month,category,planned,actual,notes) VALUES(?,?,?,?,?,?,?)", bdata)
     db.commit(); db.close()
     print("Dados inseridos!")
+
+def normalize_phone(num):
+    if not num: return ""
+    cleared = "".join(filter(str.isdigit, str(num)))
+    while True:
+        if cleared.startswith("0") and len(cleared) > 1:
+            cleared = cleared[1:]
+            continue
+        if cleared.startswith("55") and len(cleared) >= 12:
+            cleared = cleared[2:]
+            continue
+        break
+    return cleared
 
 def success(data=None, message="OK", st=200): return jsonify({"success":True,"message":message,"data":data}), st
 def error(message, st=400): return jsonify({"success":False,"message":message,"data":None}), st
@@ -206,7 +265,8 @@ def dashboard():
     ba=query_db("SELECT COALESCE(SUM(actual),0) as v FROM budget WHERE year=?",[yr],one=True)["v"]
     by_cat=query_db("SELECT category,COUNT(*) as count,SUM(cost) as total_cost FROM assets GROUP BY category")
     by_st=query_db("SELECT status,COUNT(*) as count FROM assets GROUP BY status")
-    return success({"kpis":{"total_assets":ac,"active":active,"value":tv,"licenses":lc,"expiring":exp,"budget_planned":bp,"budget_actual":ba},"charts":{"by_category":by_cat,"by_status":by_st}})
+    by_dept=query_db("SELECT COALESCE(d.name, 'Sem Departamento') as department, COUNT(*) as count FROM assets a LEFT JOIN departments d ON a.department_id=d.id GROUP BY a.department_id ORDER BY count DESC")
+    return success({"kpis":{"total_assets":ac,"active":active,"value":tv,"licenses":lc,"expiring":exp,"budget_planned":bp,"budget_actual":ba},"charts":{"by_category":by_cat,"by_status":by_st,"by_department":by_dept}})
 
 # ─────────── ASSETS ───────────
 @app.route("/api/assets",methods=["GET"])
@@ -214,7 +274,7 @@ def dashboard():
 def list_assets():
     s=request.args.get("search",""); cat=request.args.get("category",""); st=request.args.get("status","")
     q="SELECT a.*,d.name as dept FROM assets a LEFT JOIN departments d ON a.department_id=d.id WHERE 1=1"; p=[]
-    if s: q+=" AND (a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ?)"; w="%"+s+"%"; p.extend([w]*3)
+    if s: q+=" AND (a.name LIKE ? OR a.serial_number LIKE ? OR a.brand LIKE ? OR a.pulsus_number LIKE ?)"; w="%"+s+"%"; p.extend([w]*4)
     if cat: q+=" AND a.category=?"; p.append(cat)
     if st: q+=" AND a.status=?"; p.append(st)
     q+=" ORDER BY a.updated_at DESC"
@@ -233,6 +293,19 @@ def import_assets():
     dialect = csv.Sniffer().sniff(stream.read(1024)); stream.seek(0)
     reader = csv.DictReader(stream, dialect=dialect)
     
+    # Carrega os departamentos cadastrados para mapear nomes para IDs
+    depts = query_db("SELECT id, name FROM departments")
+    dept_mapping = {}
+    def norm_name(s):
+        if not s: return ""
+        s = s.strip().lower()
+        replacements = {"á":"a", "à":"a", "ã":"a", "â":"a", "é":"e", "ê":"e", "í":"i", "ó":"o", "ô":"o", "õ":"o", "ú":"u", "ç":"c"}
+        for k, v in replacements.items():
+            s = s.replace(k, v)
+        return s
+    for d in depts:
+        dept_mapping[norm_name(d["name"])] = d["id"]
+        
     # Mapeamento de colunas (Portugues -> Interno)
     mapping = {
         'nome': 'name', 'categoria': 'category', 'status': 'status',
@@ -242,7 +315,8 @@ def import_assets():
         'condicao': 'condition', 'condition': 'condition',
         'responsavel': 'assigned_to', 'assigned_to': 'assigned_to',
         'localizacao': 'location', 'location': 'location',
-        'custo': 'cost', 'cost': 'cost', 'notas': 'notes', 'observacoes': 'notes'
+        'custo': 'cost', 'cost': 'cost', 'notas': 'notes', 'observacoes': 'notes',
+        'departamento': 'department', 'department': 'department', 'setor': 'department'
     }
     
     count = 0; errors = []
@@ -257,26 +331,41 @@ def import_assets():
                 errors.append(f"Linha {reader.line_num}: Nome e Categoria sao obrigatorios")
                 continue
             
+            dept_id = None
+            raw_dept = d.get('department')
+            if raw_dept:
+                norm_dept = norm_name(raw_dept)
+                if norm_dept in dept_mapping:
+                    dept_id = dept_mapping[norm_dept]
+                    
             aid = gen_id()
-            execute_db("""INSERT INTO assets(id,name,category,serial_number,asset_tag,brand,model,cost,status,condition,assigned_to,location,notes) 
-                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            execute_db("""INSERT INTO assets(id,name,category,serial_number,asset_tag,brand,model,cost,status,condition,assigned_to,location,notes,department_id) 
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (aid, d['name'], d['category'], d.get('serial_number'), d.get('asset_tag'), 
                         d.get('brand'), d.get('model'), float(d.get('cost', 0) or 0), 
                         d.get('status', 'Ativo'), d.get('condition', 'Bom'), 
-                        d.get('assigned_to'), d.get('location'), d.get('notes')))
+                        d.get('assigned_to'), d.get('location'), d.get('notes'), dept_id))
             count += 1
         except Exception as e:
-            errors.append(f"Linha {reader.line_num}: {str(e)}")
+            err_msg = str(e)
+            if "UNIQUE constraint failed" in err_msg:
+                if "assets.serial_number" in err_msg:
+                    err_msg = "Número de Série duplicado ou já cadastrado no sistema"
+                elif "assets.asset_tag" in err_msg:
+                    err_msg = "Patrimônio duplicado ou já cadastrado no sistema"
+                else:
+                    err_msg = "Dado duplicado detectado"
+            errors.append(f"Linha {reader.line_num}: {err_msg}")
             
     return success({"count": count, "errors": errors}, f"{count} ativos importados" if not errors else f"{count} importados com {len(errors)} erros")
 
 @app.route("/api/assets/template")
 def download_template():
     # Retorna os cabecalhos como texto CSV com alguns exemplos
-    headers = "nome,categoria,n_serie,patrimonio,marca,modelo,status,condicao,responsavel,localizacao,custo,notas\n"
-    e1 = "Dell Optiplex 7090,Computador,DL-7090-001,PAT-001,Dell,Optiplex,Ativo,Bom,Joao Silva,Sala TI,5200,Desktop principal\n"
-    e2 = "MacBook Pro 14,Notebook,AP-MBP-002,PAT-002,Apple,M3 Pro,Ativo,Novo,Maria Santos,Home Office,18500,\n"
-    e3 = "iPhone 15 Pro,Celular,AP-IP15-003,PAT-003,Apple,15 Pro,Em Manutencao,Bom,Carlos Mendes,TI,8999,Tela trincada\n"
+    headers = "nome,categoria,n_serie,patrimonio,marca,modelo,status,condicao,responsavel,departamento,localizacao,custo,notas\n"
+    e1 = "Dell Optiplex 7090,Computador,DL-7090-001,PAT-001,Dell,Optiplex,Ativo,Bom,Joao Silva,TI,Sala TI,5200,Desktop principal\n"
+    e2 = "MacBook Pro 14,Notebook,AP-MBP-002,PAT-002,Apple,M3 Pro,Ativo,Novo,Maria Santos,Marketing,Home Office,18500,\n"
+    e3 = "iPhone 15 Pro,Celular,AP-IP15-003,PAT-003,Apple,15 Pro,Em Manutencao,Bom,Carlos Mendes,Diretoria,TI,8999,Tela trincada\n"
     content = headers + e1 + e2 + e3
     return content, 200, {'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename=modelo_ativos_exemplo.csv'}
 
@@ -299,9 +388,20 @@ def create_asset():
     tag = d.get("asset_tag","").strip() or None
     dept_id = d.get("department_id","").strip() or None
     vend_id = d.get("vendor_id","").strip() or None
+    pulsus = d.get("pulsus_number","").strip() or None
     
-    execute_db("INSERT INTO assets(id,name,category,serial_number,asset_tag,brand,model,specifications,purchase_date,warranty_end,cost,residual_value,useful_life_months,status,condition,assigned_to,department_id,location,vendor_id,notes,image_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-               (aid,d["name"],d["category"],sn,tag,d.get("brand"),d.get("model"),json.dumps(d.get("specifications",{})),d.get("purchase_date"),d.get("warranty_end"),d.get("cost",0),d.get("residual_value",0),d.get("useful_life_months",60),d.get("status","Ativo"),d.get("condition","Novo"),d.get("assigned_to"),dept_id,d.get("location"),vend_id,d.get("notes"),d.get("image_url")))
+    # Validação de duplicidade antes da inserção
+    if sn:
+        existing_sn = query_db("SELECT name FROM assets WHERE serial_number=?", [sn], one=True)
+        if existing_sn:
+            return error(f"Já existe um ativo cadastrado com o Número de Série '{sn}' ({existing_sn['name']})", 400)
+    if tag:
+        existing_tag = query_db("SELECT name FROM assets WHERE asset_tag=?", [tag], one=True)
+        if existing_tag:
+            return error(f"Já existe um ativo cadastrado com o código de Patrimônio '{tag}' ({existing_tag['name']})", 400)
+            
+    execute_db("INSERT INTO assets(id,name,category,serial_number,asset_tag,brand,model,specifications,purchase_date,warranty_end,cost,residual_value,useful_life_months,status,condition,assigned_to,department_id,location,vendor_id,notes,image_url,pulsus_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               (aid,d["name"],d["category"],sn,tag,d.get("brand"),d.get("model"),json.dumps(d.get("specifications",{})),d.get("purchase_date"),d.get("warranty_end"),d.get("cost",0),d.get("residual_value",0),d.get("useful_life_months",60),d.get("status","Ativo"),d.get("condition","Novo"),d.get("assigned_to"),dept_id,d.get("location"),vend_id,d.get("notes"),d.get("image_url"),pulsus))
     log_asset_history(aid, "Cadastro", None, d.get("status","Ativo"), d.get("assigned_to","Sistema"), "Ativo cadastrado no sistema")
     return success({"id":aid},"Criado",201)
 
@@ -317,7 +417,7 @@ def update_asset(aid):
         "name", "category", "serial_number", "asset_tag", "brand", 
         "model", "status", "condition", "assigned_to", "department_id", 
         "location", "cost", "notes", "image_url", "purchase_date", 
-        "warranty_end", "residual_value", "useful_life_months", "vendor_id"
+        "warranty_end", "residual_value", "useful_life_months", "vendor_id", "pulsus_number"
     ]
 
     field_labels = {
@@ -339,7 +439,8 @@ def update_asset(aid):
         "warranty_end": "Fim da Garantia",
         "residual_value": "Valor Residual",
         "useful_life_months": "Vida Útil (meses)",
-        "vendor_id": "Fornecedor"
+        "vendor_id": "Fornecedor",
+        "pulsus_number": "Nº do Pulsus"
     }
 
     # Detecta mudancas para logar no historico
@@ -486,19 +587,118 @@ def update_maintenance(mid):
 @auth_required
 def list_licenses():
     items=query_db("SELECT * FROM licenses ORDER BY end_date ASC")
-    for i in items: i["util"]=round(i["used_seats"]/i["total_seats"]*100,1) if i["total_seats"]>0 else 0
     return success(items)
+
+@app.route("/api/licenses/<lid>", methods=["GET"])
+@auth_required
+def get_license(lid):
+    license = query_db("SELECT * FROM licenses WHERE id=?", [lid], one=True)
+    if not license: return error("Licença não encontrada", 404)
+    license["util"] = round(license["used_seats"] / license["total_seats"] * 100, 1) if license["total_seats"] > 0 else 0
+    license["history"] = query_db("SELECT * FROM licenses_history WHERE license_id=? ORDER BY created_at DESC", [lid])
+    return success(license)
 
 @app.route("/api/licenses",methods=["POST"])
 @auth_required
 def create_license():
     d=request.json; lid=gen_id()
     execute_db("INSERT INTO licenses(id,name,vendor_id,vendor_name,license_type,category,license_key,total_seats,used_seats,cost_per_seat,total_cost,billing_cycle,start_date,end_date,auto_renew,status,compliance_notes,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(lid,d["name"],d.get("vendor_id"),d.get("vendor_name"),d.get("license_type","Assinatura"),d.get("category"),d.get("license_key"),d.get("total_seats",1),d.get("used_seats",0),d.get("cost_per_seat",0),d.get("total_cost",0),d.get("billing_cycle","Mensal"),d.get("start_date"),d.get("end_date"),d.get("auto_renew",0),d.get("status","Ativa"),d.get("compliance_notes"),d.get("notes")))
+    log_license_history(lid, "Cadastro", None, "Ativa", d.get("performed_by", "Sistema"), "Licença de software cadastrada no sistema")
     return success({"id":lid},"Criado",201)
+
+@app.route("/api/licenses/<lid>",methods=["PUT"])
+@auth_required
+def update_license(lid):
+    d = request.json
+    old = query_db("SELECT * FROM licenses WHERE id=?", [lid], one=True)
+    if not old: return error("Licença não encontrada", 404)
+
+    performed_by = d.get("performed_by", "Sistema")
+    fields = [
+        "name", "vendor_name", "license_type", "category", "license_key",
+        "total_seats", "used_seats", "cost_per_seat", "total_cost",
+        "billing_cycle", "status", "start_date", "end_date", "notes", "compliance_notes"
+    ]
+
+    field_labels = {
+        "name": "Nome",
+        "vendor_name": "Fornecedor",
+        "license_type": "Tipo de Licença",
+        "category": "Categoria",
+        "license_key": "Chave de Licença",
+        "total_seats": "Total de Licenças",
+        "used_seats": "Em Uso",
+        "cost_per_seat": "Custo por Assento",
+        "total_cost": "Custo Total",
+        "billing_cycle": "Ciclo de Faturamento",
+        "status": "Status",
+        "start_date": "Data de Início",
+        "end_date": "Data de Vencimento",
+        "notes": "Observações",
+        "compliance_notes": "Notas de Conformidade"
+    }
+
+    for f in fields:
+        if f in d:
+            new_val = d[f]
+            if isinstance(new_val, str) and new_val.strip() == "":
+                new_val = None
+            old_val = old[f]
+
+            # Normalizações de tipos
+            if f in ["total_seats", "used_seats"]:
+                try:
+                    new_val_comp = int(new_val) if new_val is not None else 0
+                    old_val_comp = int(old_val) if old_val is not None else 0
+                except:
+                    new_val_comp, old_val_comp = new_val, old_val
+            elif f in ["cost_per_seat", "total_cost"]:
+                try:
+                    new_val_comp = float(new_val) if new_val is not None else 0.0
+                    old_val_comp = float(old_val) if old_val is not None else 0.0
+                except:
+                    new_val_comp, old_val_comp = new_val, old_val
+            else:
+                new_val_comp, old_val_comp = new_val, old_val
+
+            if new_val_comp != old_val_comp:
+                label = field_labels.get(f, f)
+                from_str = str(old_val) if old_val is not None else "Nenhum"
+                to_str = str(new_val) if new_val is not None else "Nenhum"
+
+                if f in ["cost_per_seat", "total_cost"]:
+                    from_str = f"R$ {float(old_val_comp):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    to_str = f"R$ {float(new_val_comp):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+                notes_msg = f"Campo '{label}' modificado de '{from_str}' para '{to_str}'"
+                log_license_history(lid, "Atualização", from_str, to_str, performed_by, notes_msg)
+
+    sets = []
+    vals = []
+    for f in fields:
+        if f in d:
+            val = d[f]
+            if f in ["vendor_name", "license_key", "start_date", "end_date", "notes", "compliance_notes"]:
+                if isinstance(val, str):
+                    val = val.strip() or None
+            sets.append(f"{f}=?")
+            vals.append(val)
+    if sets:
+        sets.append("updated_at=datetime('now')")
+        vals.append(lid)
+        execute_db(f"UPDATE licenses SET {','.join(sets)} WHERE id=?", vals)
+    return success(message="Licença atualizada")
+
+@app.route("/api/licenses/<lid>/history", methods=["GET"])
+@auth_required
+def get_license_history(lid):
+    items = query_db("SELECT * FROM licenses_history WHERE license_id=? ORDER BY created_at DESC", [lid])
+    return success(items)
 
 @app.route("/api/licenses/<lid>",methods=["DELETE"])
 @auth_required
 def delete_license(lid):
+    execute_db("DELETE FROM licenses_history WHERE license_id=?", [lid])
     execute_db("DELETE FROM asset_licenses WHERE license_id=?", [lid])
     execute_db("DELETE FROM licenses WHERE id=?", [lid])
     return success(message="Removido")
@@ -668,6 +868,580 @@ def upload_file():
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# ─────────── TELECOM / MOBILE LINES ───────────
+
+@app.route("/api/telecom/lines", methods=["GET"])
+@auth_required
+def list_mobile_lines():
+    search = request.args.get("search", "")
+    op = request.args.get("operator", "")
+    st = request.args.get("status", "")
+    
+    q = """
+        SELECT ml.*, d.name as dept, a.name as asset_name 
+        FROM mobile_lines ml 
+        LEFT JOIN departments d ON ml.department_id=d.id 
+        LEFT JOIN assets a ON ml.asset_id=a.id 
+        WHERE 1=1
+    """
+    p = []
+    if search:
+        q += " AND (ml.phone_number LIKE ? OR ml.assigned_to LIKE ? OR ml.sim_card LIKE ? OR ml.pulsus_number LIKE ?)"
+        w = "%" + search + "%"
+        p.extend([w, w, w, w])
+    if op:
+        q += " AND ml.plan_name LIKE ?"
+        p.append("%" + op + "%")
+    if st:
+        q += " AND ml.status=?"
+        p.append(st)
+        
+    q += " ORDER BY ml.phone_number ASC"
+    items = query_db(q, p)
+    
+    # Calcula status de vencimento da auditoria
+    now = datetime.now()
+    for i in items:
+        last_aud = i.get("last_audited_at")
+        interval = i.get("audit_interval_days")
+        if interval is None:
+            interval = 90
+            
+        if not last_aud:
+            i["days_since_last_audit"] = None
+            i["is_audit_overdue"] = True
+        else:
+            try:
+                # Trata formatos YYYY-MM-DD ou YYYY-MM-DD HH:MM:SS
+                dt_str = last_aud.split()[0]
+                last_date = datetime.strptime(dt_str, "%Y-%m-%d")
+                delta = (now - last_date).days
+                i["days_since_last_audit"] = delta
+                i["is_audit_overdue"] = delta > interval
+            except Exception as ex:
+                i["days_since_last_audit"] = None
+                i["is_audit_overdue"] = True
+                
+    return success(items)
+
+@app.route("/api/telecom/lines", methods=["POST"])
+@auth_required
+def create_mobile_line():
+    d = request.json
+    raw_num = d.get("phone_number", "").strip()
+    if not raw_num: return error("Número do telefone é obrigatório")
+    num = normalize_phone(raw_num)
+    if not num: return error("Número do telefone inválido")
+    
+    # Valida se já existe
+    existing = query_db("SELECT id FROM mobile_lines WHERE phone_number=?", [num], one=True)
+    if existing: return error("Este número de telefone já está cadastrado")
+    
+    lid = gen_id()
+    sim = d.get("sim_card", "").strip() or None
+    dept_id = d.get("department_id", "").strip() or None
+    asset_id = d.get("asset_id", "").strip() or None
+    interval = int(d.get("audit_interval_days") or 90)
+    last_aud = d.get("last_audited_at", "").strip() or None
+    pulsus = d.get("pulsus_number", "").strip() or None
+    
+    execute_db(
+        "INSERT INTO mobile_lines(id, phone_number, sim_card, assigned_to, department_id, asset_id, plan_name, monthly_cost, status, notes, audit_interval_days, last_audited_at, pulsus_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (lid, num, sim, d.get("assigned_to"), dept_id, asset_id, d.get("plan_name", "Vivo"), float(d.get("monthly_cost", 0) or 0), d.get("status", "Ativo"), d.get("notes"), interval, last_aud, pulsus)
+    )
+    log_line_history(lid, "Cadastro", None, d.get("status", "Ativo"), g.user["username"], "Linha móvel cadastrada no sistema")
+    return success({"id": lid}, "Linha móvel criada", 201)
+
+@app.route("/api/telecom/lines/<lid>", methods=["PUT"])
+@auth_required
+def update_mobile_line(lid):
+    d = request.json
+    old = query_db("SELECT * FROM mobile_lines WHERE id=?", [lid], one=True)
+    if not old: return error("Linha móvel não encontrada", 404)
+    
+    raw_num = d.get("phone_number", "").strip()
+    if not raw_num: return error("Número do telefone é obrigatório")
+    num = normalize_phone(raw_num)
+    if not num: return error("Número do telefone inválido")
+    
+    # Valida se já existe em outro registro
+    existing = query_db("SELECT id FROM mobile_lines WHERE phone_number=? AND id!=?", [num, lid], one=True)
+    if existing: return error("Este número de telefone já está cadastrado em outra linha")
+    
+    sim = d.get("sim_card", "").strip() or None
+    dept_id = d.get("department_id", "").strip() or None
+    asset_id = d.get("asset_id", "").strip() or None
+    interval = int(d.get("audit_interval_days") or 90)
+    last_aud = d.get("last_audited_at", "").strip() or None
+    pulsus = d.get("pulsus_number", "").strip() or None
+    
+    execute_db(
+        "UPDATE mobile_lines SET phone_number=?, sim_card=?, assigned_to=?, department_id=?, asset_id=?, plan_name=?, monthly_cost=?, status=?, notes=?, audit_interval_days=?, last_audited_at=?, pulsus_number=? WHERE id=?",
+        (num, sim, d.get("assigned_to"), dept_id, asset_id, d.get("plan_name"), float(d.get("monthly_cost", 0) or 0), d.get("status"), d.get("notes"), interval, last_aud, pulsus, lid)
+    )
+    
+    if old["assigned_to"] != d.get("assigned_to"):
+        log_line_history(lid, "Transferencia", old["assigned_to"], d.get("assigned_to"), g.user["username"], "Portador da linha alterado manualmente")
+    elif old["status"] != d.get("status"):
+        log_line_history(lid, "Mudanca de Status", old["status"], d.get("status"), g.user["username"], "Status da linha alterado manualmente")
+    elif old.get("pulsus_number") != pulsus:
+        log_line_history(lid, "Pulsus Alterado", old.get("pulsus_number"), pulsus, g.user["username"], "Nº do Pulsus alterado manualmente")
+    else:
+        log_line_history(lid, "Atualizacao", None, None, g.user["username"], "Detalhes da linha atualizados")
+        
+    return success(message="Linha móvel atualizada")
+
+@app.route("/api/telecom/lines/<lid>", methods=["GET"])
+@auth_required
+def get_mobile_line(lid):
+    line = query_db("""
+        SELECT ml.*, d.name as dept, a.name as asset_name 
+        FROM mobile_lines ml 
+        LEFT JOIN departments d ON ml.department_id=d.id 
+        LEFT JOIN assets a ON ml.asset_id=a.id 
+        WHERE ml.id=?
+    """, [lid], one=True)
+    if not line: return error("Linha móvel não encontrada", 404)
+    line["history"] = query_db("SELECT * FROM mobile_lines_history WHERE mobile_line_id=? ORDER BY created_at DESC", [lid])
+    
+    # Calcula status de vencimento da auditoria
+    now = datetime.now()
+    last_aud = line.get("last_audited_at")
+    interval = line.get("audit_interval_days")
+    if interval is None:
+        interval = 90
+        
+    if not last_aud:
+        line["days_since_last_audit"] = None
+        line["is_audit_overdue"] = True
+    else:
+        try:
+            dt_str = last_aud.split()[0]
+            last_date = datetime.strptime(dt_str, "%Y-%m-%d")
+            delta = (now - last_date).days
+            line["days_since_last_audit"] = delta
+            line["is_audit_overdue"] = delta > interval
+        except:
+            line["days_since_last_audit"] = None
+            line["is_audit_overdue"] = True
+            
+    return success(line)
+
+@app.route("/api/telecom/lines/<lid>", methods=["DELETE"])
+@auth_required
+def delete_mobile_line(lid):
+    execute_db("DELETE FROM telecom_audit_items WHERE mobile_line_id=?", [lid])
+    execute_db("DELETE FROM mobile_lines WHERE id=?", [lid])
+    return success(message="Linha móvel removida")
+
+@app.route("/api/telecom/lines/template", methods=["GET"])
+@auth_required
+def get_mobile_lines_template():
+    # Retorna o CSV modelo para download
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["telefone", "iccid", "portador", "departamento", "plano", "custo_mensal", "frequencia", "status", "observacoes", "pulsus"])
+    writer.writerow(["11999999999", "8955123456789012345", "João da Silva", "Gente", "Vivo Empresas", "49.90", "90", "Ativo", "Linha corporativa de uso geral", "P12345"])
+    writer.writerow(["011988888888", "", "Maria Santos", "TI", "Vivo Empresas", "39.90", "90", "Ativo", "Linha sem SIM Card cadastrado", "P54321"])
+    
+    from flask import make_response
+    response = make_response(output.getvalue())
+    response.headers["Content-Disposition"] = "attachment; filename=modelo_importacao_linhas.csv"
+    response.headers["Content-Type"] = "text/csv; charset=utf-8-sig"
+    return response
+
+@app.route("/api/telecom/lines/import", methods=["POST"])
+@auth_required
+def import_mobile_lines():
+    if "file" not in request.files:
+        return error("Nenhum arquivo enviado")
+    
+    file = request.files["file"]
+    if not file or file.filename == "":
+        return error("Nenhum arquivo selecionado")
+    
+    try:
+        # Lê o arquivo. Tenta decodificar em UTF-8 com fallback para ISO-8859-1 (latin1)
+        file_bytes = file.read()
+        try:
+            content = file_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            content = file_bytes.decode("latin1")
+            
+        stream = io.StringIO(content)
+        # Tenta detectar dialeto do CSV (se é separado por vírgula ou ponto-e-vírgula)
+        sample = content[:4096]
+        if ";" in sample and "," not in sample:
+            delimiter = ";"
+        else:
+            delimiter = ","
+            
+        reader = csv.reader(stream, delimiter=delimiter)
+        try:
+            headers = next(reader)
+        except StopIteration:
+            return error("Arquivo CSV vazio")
+            
+        # Normaliza cabeçalhos
+        headers = [h.strip().lower() for h in headers]
+        
+        # Mapeia os índices das colunas esperadas
+        col_map = {}
+        expected = ["telefone", "iccid", "portador", "departamento", "plano", "custo_mensal", "frequencia", "status", "observacoes", "pulsus"]
+        for key in expected:
+            if key in headers:
+                col_map[key] = headers.index(key)
+            else:
+                # Tenta variações comuns em português/inglês
+                variations = {
+                    "telefone": ["phone", "phone_number", "numero", "número", "linha"],
+                    "iccid": ["sim", "sim_card", "simcard"],
+                    "portador": ["user", "assigned_to", "nome", "funcionario", "funcionário"],
+                    "departamento": ["dept", "department", "setor", "área", "area"],
+                    "plano": ["plan", "plan_name"],
+                    "custo_mensal": ["cost", "monthly_cost", "custo", "valor"],
+                    "frequencia": ["frequency", "interval", "audit_interval_days", "frequência", "intervalo"],
+                    "status": ["state", "situacao", "situação"],
+                    "observacoes": ["notes", "obs", "observacao", "observações"],
+                    "pulsus": ["pulsus", "pulsus_number", "numero_pulsus", "n_pulsus", "nº_pulsus", "nº do pulsus", "num_pulsus", "num do pulsus", "n_do_pulsus"]
+                }
+                found = False
+                for var in variations[key]:
+                    if var in headers:
+                        col_map[key] = headers.index(var)
+                        found = True
+                        break
+                if not found:
+                    col_map[key] = -1
+                    
+        if col_map["telefone"] == -1:
+            return error("Coluna de 'telefone' não encontrada no arquivo CSV. Colunas encontradas: " + ", ".join(headers))
+            
+        # Carrega os departamentos cadastrados para mapear nomes para IDs
+        depts = query_db("SELECT id, name FROM departments")
+        dept_mapping = {}
+        def norm_name(s):
+            if not s: return ""
+            s = s.strip().lower()
+            replacements = {"á":"a", "à":"a", "ã":"a", "â":"a", "é":"e", "ê":"e", "í":"i", "ó":"o", "ô":"o", "õ":"o", "ú":"u", "ç":"c"}
+            for k, v in replacements.items():
+                s = s.replace(k, v)
+            return s
+            
+        for d in depts:
+            dept_mapping[norm_name(d["name"])] = d["id"]
+            
+        # Carrega telefones já existentes
+        existing_lines = query_db("SELECT phone_number FROM mobile_lines")
+        existing_phones = {normalize_phone(row["phone_number"]) for row in existing_lines}
+        
+        imported_count = 0
+        skipped_count = 0
+        error_count = 0
+        
+        db_entries = []
+        batch_phones = set()
+        
+        for row in reader:
+            if not row or all(cell.strip() == "" for cell in row):
+                continue
+                
+            def get_val(key, default=""):
+                idx = col_map[key]
+                if idx != -1 and idx < len(row):
+                    return row[idx].strip()
+                return default
+                
+            raw_phone = get_val("telefone")
+            phone = normalize_phone(raw_phone)
+            
+            if not phone:
+                error_count += 1
+                continue
+                
+            # Verifica duplicados (no banco ou neste próprio lote)
+            if phone in existing_phones or phone in batch_phones:
+                skipped_count += 1
+                continue
+                
+            sim_card = get_val("iccid") or None
+            assigned_to = get_val("portador") or None
+            dept_name = get_val("departamento")
+            dept_id = None
+            if dept_name:
+                norm_dept = norm_name(dept_name)
+                dept_id = dept_mapping.get(norm_dept, None)
+                if not dept_id:
+                    for name_key, d_id in dept_mapping.items():
+                        if name_key in norm_dept or norm_dept in name_key:
+                            dept_id = d_id
+                            break
+                            
+            plan_name = get_val("plano") or "Vivo Empresas"
+            
+            raw_cost = get_val("custo_mensal", "0").replace(",", ".")
+            try:
+                monthly_cost = float("".join(c for c in raw_cost if c.isdigit() or c == ".")) if raw_cost else 0.0
+            except ValueError:
+                monthly_cost = 0.0
+                
+            raw_freq = get_val("frequencia", "90")
+            try:
+                audit_interval_days = int("".join(c for c in raw_freq if c.isdigit())) if raw_freq else 90
+            except ValueError:
+                audit_interval_days = 90
+                
+            status = get_val("status") or "Ativo"
+            notes = get_val("observacoes") or ""
+            pulsus = get_val("pulsus") or None
+            
+            lid = gen_id()
+            db_entries.append((
+                lid, phone, sim_card, assigned_to, dept_id, None, plan_name, monthly_cost, status, notes, audit_interval_days, None, pulsus
+            ))
+            batch_phones.add(phone)
+            
+        if db_entries:
+            for entry in db_entries:
+                execute_db(
+                    "INSERT INTO mobile_lines(id, phone_number, sim_card, assigned_to, department_id, asset_id, plan_name, monthly_cost, status, notes, audit_interval_days, last_audited_at, pulsus_number) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    entry
+                )
+            imported_count = len(db_entries)
+            
+        return success({
+            "imported": imported_count,
+            "skipped": skipped_count,
+            "errors": error_count
+        }, f"Importação finalizada: {imported_count} importadas, {skipped_count} duplicadas puladas, {error_count} falhas.")
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return error("Erro ao processar arquivo: " + str(e))
+
+@app.route("/api/telecom/lines/<lid>/history", methods=["GET"])
+@auth_required
+def list_mobile_line_history(lid):
+    items = query_db("SELECT * FROM mobile_lines_history WHERE mobile_line_id=? ORDER BY created_at DESC", [lid])
+    return success(items)
+
+@app.route("/api/telecom/lines/<lid>/comments", methods=["POST"])
+@auth_required
+def add_mobile_line_comment(lid):
+    d = request.json
+    author = d.get("author", "Sistema").strip() or "Sistema"
+    text = d.get("text", "").strip()
+    if not text: return error("Texto do comentário é obrigatório")
+    
+    log_line_history(lid, "Comentario", None, None, author, text)
+    return success(message="Comentário adicionado")
+
+# ─────────── AUDITORIAS DE TELEFONIA ───────────
+
+@app.route("/api/telecom/audits", methods=["GET"])
+@auth_required
+def list_telecom_audits():
+    items = query_db("SELECT * FROM telecom_audits ORDER BY year DESC, month DESC")
+    for audit in items:
+        stats = query_db("SELECT is_confirmed, COUNT(*) as cnt FROM telecom_audit_items WHERE audit_id=? GROUP BY is_confirmed", [audit["id"]])
+        audit["total_items"] = sum(s["cnt"] for s in stats)
+        audit["confirmed_items"] = sum(s["cnt"] for s in stats if s["is_confirmed"] == 1)
+    return success(items)
+
+@app.route("/api/telecom/audits", methods=["POST"])
+@auth_required
+def create_telecom_audit():
+    d = request.json
+    month = int(d.get("month", datetime.now().month))
+    year = int(d.get("year", datetime.now().year))
+    title = d.get("title", f"Auditoria Vivo - {month:02d}/{year}")
+    
+    # Evita duplicado para o mesmo mês/ano
+    existing = query_db("SELECT id FROM telecom_audits WHERE month=? AND year=?", (month, year), one=True)
+    if existing: return error(f"Já existe uma auditoria cadastrada para {month:02d}/{year}")
+    
+    aid = gen_id()
+    execute_db("INSERT INTO telecom_audits(id, title, month, year, status) VALUES(?,?,?,?,?)", (aid, title, month, year, "Aberto"))
+    
+    # Copia linhas móveis ativas para a auditoria
+    lines = query_db("SELECT id, assigned_to FROM mobile_lines WHERE status='Ativo'")
+    for line in lines:
+        execute_db(
+            "INSERT INTO telecom_audit_items(id, audit_id, mobile_line_id, original_user, confirmed_user, is_confirmed, notes) VALUES(?,?,?,?,?,?,?)",
+            (gen_id(), aid, line["id"], line["assigned_to"], None, 0, "")
+        )
+    return success({"id": aid, "items_count": len(lines)}, "Auditoria iniciada", 201)
+
+@app.route("/api/telecom/audits/<aid>", methods=["GET"])
+@auth_required
+def get_telecom_audit(aid):
+    audit = query_db("SELECT * FROM telecom_audits WHERE id=?", [aid], one=True)
+    if not audit: return error("Auditoria não encontrada", 404)
+    
+    items = query_db("""
+        SELECT tai.*, ml.phone_number, ml.sim_card, ml.plan_name, ml.monthly_cost, ml.status,
+               d.name as dept, a.name as asset_name
+        FROM telecom_audit_items tai
+        JOIN mobile_lines ml ON tai.mobile_line_id = ml.id
+        LEFT JOIN departments d ON ml.department_id = d.id
+        LEFT JOIN assets a ON ml.asset_id = a.id
+        WHERE tai.audit_id = ?
+        ORDER BY tai.is_confirmed ASC, ml.phone_number ASC
+    """, [aid])
+    
+    audit["items"] = items
+    return success(audit)
+
+@app.route("/api/telecom/audits/<aid>/items/<item_id>", methods=["PUT"])
+@auth_required
+def update_telecom_audit_item(aid, item_id):
+    d = request.json
+    is_confirmed = 1 if d.get("is_confirmed", True) else 0
+    conf_user = d.get("confirmed_user", "").strip() or None
+    notes = d.get("notes", "").strip() or None
+    
+    execute_db(
+        "UPDATE telecom_audit_items SET confirmed_user=?, is_confirmed=?, notes=?, updated_at=datetime('now') WHERE id=? AND audit_id=?",
+        (conf_user, is_confirmed, notes, item_id, aid)
+    )
+    
+    # Se confirmado, opcionalmente atualiza o portador principal na tabela de mobile_lines
+    if is_confirmed:
+        item = query_db("SELECT mobile_line_id FROM telecom_audit_items WHERE id=?", [item_id], one=True)
+        if item:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if conf_user and d.get("sync_to_line", True):
+                execute_db("UPDATE mobile_lines SET assigned_to=?, last_audited_at=? WHERE id=?", (conf_user, today_str, item["mobile_line_id"]))
+                log_line_history(item["mobile_line_id"], "Auditoria", None, conf_user, g.user["username"], f"Linha inventariada no sistema. Portador confirmado: {conf_user}")
+            else:
+                execute_db("UPDATE mobile_lines SET last_audited_at=? WHERE id=?", (today_str, item["mobile_line_id"]))
+                log_line_history(item["mobile_line_id"], "Auditoria", None, None, g.user["username"], "Linha inventariada no sistema. Portador existente mantido.")
+            
+    return success(message="Item de auditoria atualizado")
+
+@app.route("/api/telecom/audits/<aid>/close", methods=["POST"])
+@auth_required
+def close_telecom_audit(aid):
+    audit = query_db("SELECT * FROM telecom_audits WHERE id=?", [aid], one=True)
+    if not audit: return error("Auditoria não encontrada", 404)
+    execute_db("UPDATE telecom_audits SET status='Concluído' WHERE id=?", [aid])
+    return success(message="Auditoria finalizada com sucesso")
+
+@app.route("/api/telecom/audits/<aid>/import-vivo", methods=["POST"])
+@auth_required
+def import_vivo_invoice(aid):
+    if 'file' not in request.files: return error("Arquivo não enviado")
+    file = request.files['file']
+    if not file.filename.endswith('.csv'): return error("Formato deve ser CSV")
+    
+    stream = io.StringIO(file.stream.read().decode("UTF-8", errors="ignore"), newline=None)
+    
+    # Sniff dialect or default to common separators
+    content_sample = stream.read(2048)
+    stream.seek(0)
+    
+    sep = ';' if ';' in content_sample else ','
+    reader = csv.reader(stream, delimiter=sep)
+    
+    # Extrai linhas e tenta mapear colunas do relatório Vivo
+    rows = list(reader)
+    if not rows: return error("Arquivo CSV vazio")
+    
+    # Cabeçalho na primeira linha
+    headers = [h.lower().strip() for h in rows[0]]
+    
+    # Procura índices de colunas chave
+    col_line = -1
+    col_dest = -1
+    col_value = -1
+    col_dur = -1
+    col_srv = -1
+    
+    # Mapeamentos comuns Vivo
+    line_aliases = ["linha", "telefone", "fone", "numero", "número", "celular", "origem", "phone", "terminal"]
+    dest_aliases = ["destino", "chamado", "fone destino", "número chamado", "called", "destination", "nro chamado"]
+    val_aliases = ["valor", "custo", "preco", "preço", "valor cobrado", "total", "cost", "value"]
+    dur_aliases = ["duracao", "duração", "tempo", "minutos", "dur.", "duration"]
+    srv_aliases = ["servico", "serviço", "descricao", "descrição", "tipo", "service"]
+    
+    for idx, h in enumerate(headers):
+        if any(alias in h for alias in line_aliases): col_line = idx
+        elif any(alias in h for alias in dest_aliases): col_dest = idx
+        elif any(alias in h for alias in val_aliases): col_value = idx
+        elif any(alias in h for alias in dur_aliases): col_dur = idx
+        elif any(alias in h for alias in srv_aliases): col_srv = idx
+        
+    if col_line == -1:
+        # Se não achou por alias, pega primeira coluna
+        col_line = 0
+        
+    # Limpa números: remove DDD/DDI ou formatação para comparar
+    def clean_phone(num):
+        cleared = "".join(filter(str.isdigit, str(num)))
+        if len(cleared) > 9:
+            return cleared[-11:]
+        return cleared
+        
+    line_calls = {}
+    
+    for row in rows[1:]:
+        if not row or len(row) <= max(col_line, col_dest, col_value, col_dur, col_srv): continue
+        
+        line_num = clean_phone(row[col_line])
+        if not line_num: continue
+        
+        dest_num = clean_phone(row[col_dest]) if col_dest != -1 else ""
+        
+        val_str = row[col_value].replace("R$", "").replace(".", "").replace(",", ".").strip() if col_value != -1 else "0"
+        try:
+            val = float(val_str)
+        except:
+            val = 0.0
+            
+        if line_num not in line_calls:
+            line_calls[line_num] = {"total_cost": 0.0, "calls": {}, "records": 0}
+            
+        line_calls[line_num]["total_cost"] += val
+        line_calls[line_num]["records"] += 1
+        if dest_num and dest_num != line_num:
+            line_calls[line_num]["calls"][dest_num] = line_calls[line_num]["calls"].get(dest_num, 0) + 1
+            
+    # Cruza dados da fatura da Vivo com os itens de auditoria
+    audit_items = query_db("SELECT tai.id, tai.mobile_line_id, ml.phone_number FROM telecom_audit_items tai JOIN mobile_lines ml ON tai.mobile_line_id = ml.id WHERE tai.audit_id=?", [aid])
+    
+    updated_count = 0
+    for item in audit_items:
+        raw_phone = item["phone_number"]
+        clean_item_phone = clean_phone(raw_phone)
+        
+        match = None
+        for k, v in line_calls.items():
+            if clean_item_phone in k or k in clean_item_phone:
+                match = v
+                break
+                
+        if match:
+            cost = match["total_cost"]
+            recs = match["records"]
+            
+            top_dest = sorted(match["calls"].items(), key=lambda x: x[1], reverse=True)[:3]
+            dest_str = ", ".join([f"{num} ({cnt}x)" for num, cnt in top_dest])
+            
+            notes = f"Gasto na Fatura Vivo: R$ {cost:.2f} ({recs} chamadas/registros). "
+            if dest_str:
+                notes += f"Ligações frequentes para: {dest_str}."
+            else:
+                notes += "Nenhum tráfego de ligações registrado na fatura (Ociosa)."
+                
+            execute_db(
+                "UPDATE telecom_audit_items SET notes=?, updated_at=datetime('now') WHERE id=?",
+                (notes, item["id"])
+            )
+            updated_count += 1
+            
+    return success({"updated": updated_count}, f"Fatura processada! {updated_count} linhas móveis associadas e auditadas com sucesso.")
 
 # ─────────── FRONTEND (SPA) ───────────
 @app.route("/", defaults={"path": ""})

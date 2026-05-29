@@ -1,6 +1,6 @@
 import requests, hashlib
 
-BASE = "http://localhost:5004/api"
+BASE = "http://localhost:5000/api"
 
 def test():
     # 1. Login
