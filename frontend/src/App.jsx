@@ -3133,6 +3133,10 @@ function CelularesPage() {
     .filter(d => !q || [d.id, d.nome, d.pat, d.frota, d.t1, d.ts, d.imei, d.iccid, d.grupo, nomeModelo(d), d.cod, d.plat === 'Android' ? 'Android ' + d.os + ';' : d.os].join(' ').toLowerCase().includes(q))
     .sort((a, b) => (k.problemas[b.id]?.length || 0) - (k.problemas[a.id]?.length || 0) || a.nome.localeCompare(b.nome, 'pt-BR'));
   const ultSync = d => { const x = diasSemSync(d, relatorio.base); return x <= 1 ? 'Hoje' : Math.floor(x) + ' d'; };
+  // Cartão "Dispositivos no Pulsus": total do relatório (respeita o grupo) com aberturas por situação e tipo
+  const tipoAparelho = d => (d.plat !== 'Android' || /^(Notebook|Desktop)/.test(nomeModelo(d)) ? 'computador' : /^Tab\b/.test(nomeModelo(d)) ? 'tablet' : 'celular');
+  const porTipo = t => doGrupo.filter(d => tipoAparelho(d) === t).length;
+  const outrosStatus = Object.entries(doGrupo.filter(d => d.status !== 'active').reduce((m, d) => ({ ...m, [d.status || 'sem status']: (m[d.status || 'sem status'] || 0) + 1 }), {}));
 
   const maxModelo = Math.max(...modelos.map(m => m.qtd), 1);
   const situacaoModelo = (m) => {
@@ -3163,6 +3167,8 @@ function CelularesPage() {
           <CelCard titulo={METAS_PADRAO.semNumero.rotulo} status={st('semNumero')} valor={fmtNCel(k.semNumero.valor)} linhas={[metaTxt('semNumero')]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.semNumero)} />
           <CelCard titulo={METAS_PADRAO.divergencia.rotulo} status={st('divergencia')} valor={fmtNCel(k.divergencia.valor)} linhas={[metaTxt('divergencia'), 'Sinal de chip trocado de aparelho']} onVer={() => verAparelhos(CEL_PROB_DO_KPI.divergencia)} />
           <CelCard titulo={METAS_PADRAO.fimCiclo.rotulo} status={st('fimCiclo')} valor={fmtPctCel(k.fimCiclo.valor)} linhas={[metaTxt('fimCiclo'), `${k.fimCiclo.n} de ${k.fimCiclo.de} Android`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.fimCiclo)} />
+          <CelCard titulo="Dispositivos no Pulsus" valor={fmtNCel(k.total)} linhas={[grupo ? `no grupo ${grupo}` : `em ${grupos.length} grupos`]} onVer={() => verAparelhos('todos')}
+            partes={[['Ativos', k.ativos], ...outrosStatus.map(([s, n]) => [s === 'wiped' ? 'Com wipe (apagados)' : `Status ${s}`, n]), ['Celulares', porTipo('celular')], ['Tablets', porTipo('tablet')], ['Computadores', porTipo('computador')]]} />
         </div>
       </CelSecao>
 
