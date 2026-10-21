@@ -2882,14 +2882,16 @@ function TelecomPage({ user }) {
 // Todo cálculo vem de lib/pulsus-indicadores.ts (regras em INDICADORES.md do pacote de integração).
 const CEL_STATUS_COLOR = { ok: 'bg-emerald-500/20 text-emerald-400', warn: 'bg-amber-500/20 text-amber-400', crit: 'bg-red-500/20 text-red-400', na: 'bg-slate-500/20 text-slate-400', nodata: 'bg-slate-500/20 text-slate-400' };
 const CEL_PROB_COLOR = { parado: 'bg-red-500/15 text-red-300', usuario: 'bg-violet-500/15 text-violet-300', patrimonio: 'bg-amber-500/15 text-amber-300', frota: 'bg-amber-500/15 text-amber-300', duplicado: 'bg-rose-500/15 text-rose-300', numero: 'bg-cyan-500/15 text-cyan-300', divergencia: 'bg-pink-500/15 text-pink-300', ciclo: 'bg-slate-500/20 text-slate-300', status: 'bg-slate-500/20 text-slate-400' };
-const CEL_PROB_DO_KPI = { sync24: 'semsync', parados: 'parado', cadastro: 'cadastro', duplicidades: 'duplicado', semNumero: 'numero', divergencia: 'divergencia', fimCiclo: 'ciclo', reserva: 'reserva' };
+// Indicadores exibidos (o "estoque reserva pronto para uso" foi retirado da tela; o módulo segue inalterado)
+const CEL_INDICADORES = Object.keys(METAS_PADRAO).filter(k => k !== 'reserva');
+const CEL_PROB_DO_KPI = { sync24: 'semsync', parados: 'parado', cadastro: 'cadastro', duplicidades: 'duplicado', semNumero: 'numero', divergencia: 'divergencia', fimCiclo: 'ciclo' };
 const CEL_FILTROS = [['todos', 'Todos'], ['comproblema', 'Com problema'], ['parado', 'Parados +7 dias'], ['semsync', 'Sem sync em 24h'], ['cadastro', 'Cadastro incompleto'], ['usuario', 'Sem usuário identificado'], ['patrimonio', 'Patrimônio'], ['frota', 'Nº Frota'], ['duplicado', 'Duplicados e inválidos'], ['numero', 'Sem número'], ['divergencia', 'Chip × SMS'], ['ciclo', 'Fim de ciclo'], ['reserva', 'Reserva'], ['comnumero', 'Com número'], ['comchip', 'Com chip'], ['doischips', '2 chips']];
 const CEL_SITUACAO_VERSAO = { atual: ['Mais recente', 'bg-emerald-500/20 text-emerald-400'], anterior: ['Versão anterior', 'bg-slate-500/20 text-slate-400'], fim: ['Fim de ciclo', 'bg-red-500/20 text-red-400'], outro: ['Computador', 'bg-slate-500/20 text-slate-400'] };
 const fmtPctCel = v => (v == null || isNaN(v) ? '—' : (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
 const fmtNCel = v => (v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
 const fmtPctInt = v => (v == null || isNaN(v) ? '—' : Math.round(v) + '%');
 const fmtAnos = v => (v == null ? '—' : v < 1 ? Math.round(v * 12) + ' meses' : v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' anos');
-const metasDoForm = m => Object.fromEntries(Object.keys(METAS_PADRAO).map(k => [k, k in m ? (m[k] ?? '') : METAS_PADRAO[k].meta]));
+const metasDoForm = m => Object.fromEntries(CEL_INDICADORES.map(k => [k, k in m ? (m[k] ?? '') : METAS_PADRAO[k].meta]));
 
 async function lerArquivoCSV(file) {
   const buf = await file.arrayBuffer();
@@ -2997,7 +2999,7 @@ function CelularesPage() {
   };
 
   const salvarMetas = async () => {
-    const novas = Object.fromEntries(Object.keys(METAS_PADRAO).map(k => { const v = metasForm[k]; return [k, v === '' || v == null ? null : Number(v)]; }));
+    const novas = Object.fromEntries(CEL_INDICADORES.map(k => { const v = metasForm[k]; return [k, v === '' || v == null ? null : Number(v)]; }));
     if (Object.values(novas).some(v => v != null && isNaN(v))) { setMetasMsg('Use apenas números nas metas.'); return; }
     try {
       await api.saveCelularesMetas(novas);
@@ -3014,7 +3016,7 @@ function CelularesPage() {
       const jaFechado = painel.itens.some(i => i.assunto === 'celulares' && i.mes === mes);
       if (!window.confirm(`Gravar os indicadores de todos os grupos no Painel de Metas como ${rotuloMes}?${jaFechado ? '\n\nEste mês já foi fechado: o fechamento anterior será substituído.' : ''}`)) return;
       const todos = calcularIndicadores(relatorio);
-      const itens = Object.entries(METAS_PADRAO).map(([chave, d]) => ({
+      const itens = CEL_INDICADORES.map(chave => [chave, METAS_PADRAO[chave]]).map(([chave, d]) => ({
         chave, rotulo: d.rotulo, tipo: d.tipo, direcao: d.direcao,
         valor: todos[chave].valor, meta: chave in metas ? metas[chave] : d.meta,
       }));
@@ -3082,7 +3084,7 @@ function CelularesPage() {
     <CelSecao titulo="Metas" info="As metas valem para todos os grupos. Percentuais em %. Deixe em branco para não ter meta.">
       <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4">
-          {Object.entries(METAS_PADRAO).map(([k, d]) => (
+          {CEL_INDICADORES.map(k => [k, METAS_PADRAO[k]]).map(([k, d]) => (
             <Input key={k} type="number" step="any" label={`${d.rotulo} (${d.direcao === 'max' ? 'mínimo' : 'máximo'}${d.tipo === 'pct' ? ', %' : ''})`}
               value={metasForm[k]} onChange={e => { setMetasForm({ ...metasForm, [k]: e.target.value }); setMetasMsg(''); }} />
           ))}
@@ -3161,7 +3163,6 @@ function CelularesPage() {
           <CelCard titulo={METAS_PADRAO.semNumero.rotulo} status={st('semNumero')} valor={fmtNCel(k.semNumero.valor)} linhas={[metaTxt('semNumero')]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.semNumero)} />
           <CelCard titulo={METAS_PADRAO.divergencia.rotulo} status={st('divergencia')} valor={fmtNCel(k.divergencia.valor)} linhas={[metaTxt('divergencia'), 'Sinal de chip trocado de aparelho']} onVer={() => verAparelhos(CEL_PROB_DO_KPI.divergencia)} />
           <CelCard titulo={METAS_PADRAO.fimCiclo.rotulo} status={st('fimCiclo')} valor={fmtPctCel(k.fimCiclo.valor)} linhas={[metaTxt('fimCiclo'), `${k.fimCiclo.n} de ${k.fimCiclo.de} Android`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.fimCiclo)} />
-          <CelCard titulo={METAS_PADRAO.reserva.rotulo} status={st('reserva')} valor={k.reserva.total ? fmtPctCel(k.reserva.valor) : '—'} linhas={[metaTxt('reserva'), `${k.reserva.prontos} de ${k.reserva.total} reservas sincronizando e com bateria ≥ 50%`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.reserva)} />
         </div>
       </CelSecao>
 
@@ -3278,7 +3279,7 @@ function CelularesPage() {
 /* ═══════════ PAINEL DE METAS ═══════════ */
 // Cada assunto define seu título e como comparar valor × meta (Celulares usa statusMeta do módulo).
 const PAINEL_ASSUNTOS = {
-  celulares: { titulo: 'Gestão de Celulares', status: (chave, valor, meta) => statusMeta(chave, valor, { [chave]: meta }) },
+  celulares: { titulo: 'Gestão de Celulares', indicadores: CEL_INDICADORES, status: (chave, valor, meta) => statusMeta(chave, valor, { [chave]: meta }) },
 };
 const PAINEL_CELULA = { ok: 'bg-emerald-500/15 text-emerald-300', warn: 'bg-amber-500/15 text-amber-300', crit: 'bg-red-500/15 text-red-300', na: 'text-slate-300', nodata: 'text-slate-600' };
 const fmtValorMeta = (tipo, v) => (v == null ? '—' : tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v));
@@ -3301,7 +3302,7 @@ function PainelMetasPage() {
   const anos = [...new Set([new Date().getFullYear(), ...data.anos])].sort((a, b) => b - a);
   // assunto → indicador → { definição do último mês fechado, valores por mês }
   const grupos = {};
-  data.itens.forEach(i => {
+  data.itens.filter(i => !PAINEL_ASSUNTOS[i.assunto]?.indicadores || PAINEL_ASSUNTOS[i.assunto].indicadores.includes(i.chave)).forEach(i => {
     const ind = ((grupos[i.assunto] = grupos[i.assunto] || {})[i.chave] = grupos[i.assunto][i.chave] || { meses: {} });
     Object.assign(ind, { chave: i.chave, rotulo: i.rotulo, tipo: i.tipo, direcao: i.direcao, ordem: i.ordem, meta: i.meta });
     ind.meses[i.mes] = i;

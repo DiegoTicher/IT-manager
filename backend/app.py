@@ -943,7 +943,7 @@ def delete_contract(cid):
 # Os calculos ficam no frontend (src/lib/pulsus-indicadores.ts); aqui so guardamos
 # o relatorio atual (o objeto Relatorio do modulo) e as metas editadas.
 # A pagina mostra nome, telefone e IMEI de funcionarios: acesso restrito a TI (perfil admin).
-CELULARES_METAS = ["sync24", "parados", "cadastro", "duplicidades", "semNumero", "divergencia", "fimCiclo", "reserva"]
+CELULARES_METAS = ["sync24", "parados", "cadastro", "duplicidades", "semNumero", "divergencia", "fimCiclo"]  # "reserva" retirado da tela
 
 def celulares_acesso():
     return g.user["role"] == "admin"
