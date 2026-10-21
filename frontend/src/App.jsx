@@ -6,7 +6,7 @@ import {
   TrendingUp, Package, Shield, RefreshCw, Building2, Users, ArrowLeft,
   MessageSquare, Wrench, Send, Eye, ClipboardCheck, CalendarDays,
   MapPin, UserCheck, ChevronRight, CircleDot, Edit3, XCircle, CheckCircle2,
-  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen, TabletSmartphone
+  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen, TabletSmartphone, Target
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -3005,6 +3005,26 @@ function CelularesPage() {
     } catch (e) { setMetasMsg('Não foi possível salvar: ' + e.message); }
   };
 
+  // Grava no Painel de Metas os 8 indicadores (todos os grupos) no mês da data-base do relatório
+  const fecharMes = async () => {
+    const [ano, mes] = rel.base.slice(0, 7).split('-').map(Number);
+    const rotuloMes = `${String(mes).padStart(2, '0')}/${ano}`;
+    try {
+      const painel = await api.getMetasPainel(ano);
+      const jaFechado = painel.itens.some(i => i.assunto === 'celulares' && i.mes === mes);
+      if (!window.confirm(`Gravar os indicadores de todos os grupos no Painel de Metas como ${rotuloMes}?${jaFechado ? '\n\nEste mês já foi fechado: o fechamento anterior será substituído.' : ''}`)) return;
+      const todos = calcularIndicadores(relatorio);
+      const itens = Object.entries(METAS_PADRAO).map(([chave, d]) => ({
+        chave, rotulo: d.rotulo, tipo: d.tipo, direcao: d.direcao,
+        valor: todos[chave].valor, meta: chave in metas ? metas[chave] : d.meta,
+      }));
+      await api.fecharMesMetas({ assunto: 'celulares', ano, mes, itens });
+      setMsg({ tipo: 'ok', texto: `Mês ${rotuloMes} fechado no Painel de Metas.` });
+    } catch (e) {
+      setMsg({ tipo: 'err', texto: 'Não foi possível fechar o mês: ' + e.message });
+    }
+  };
+
   const verAparelhos = (f, b = '') => {
     setFiltro(f); setBusca(b);
     listaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3049,7 +3069,12 @@ function CelularesPage() {
         </p>
         {rel && <p className="text-slate-500 text-xs mt-1">{rel.arquivo || 'Arquivo sem nome'} · importado por {rel.importado_por || '—'} em {fmtDateTime(rel.importado_em && rel.importado_em.replace(' ', 'T') + 'Z')}</p>}
       </div>
-      {rel && <div className="sm:w-64"><Select label="Grupo" options={grupos} value={grupo} onChange={e => { setGrupo(e.target.value); setFiltro('todos'); }} /></div>}
+      {rel && (
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+          <button onClick={fecharMes} title="Grava os indicadores de todos os grupos no Painel de Metas" className="mb-3 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-700 hover:bg-slate-600 text-white transition"><CalendarDays size={16} /> Fechar mês {rel.base.slice(5, 7)}/{rel.base.slice(0, 4)}</button>
+          <div className="sm:w-64"><Select label="Grupo" options={grupos} value={grupo} onChange={e => { setGrupo(e.target.value); setFiltro('todos'); }} /></div>
+        </div>
+      )}
     </div>
   );
 
@@ -3250,9 +3275,118 @@ function CelularesPage() {
   );
 }
 
+/* ═══════════ PAINEL DE METAS ═══════════ */
+// Cada assunto define seu título e como comparar valor × meta (Celulares usa statusMeta do módulo).
+const PAINEL_ASSUNTOS = {
+  celulares: { titulo: 'Gestão de Celulares', status: (chave, valor, meta) => statusMeta(chave, valor, { [chave]: meta }) },
+};
+const PAINEL_CELULA = { ok: 'bg-emerald-500/15 text-emerald-300', warn: 'bg-amber-500/15 text-amber-300', crit: 'bg-red-500/15 text-red-300', na: 'text-slate-300', nodata: 'text-slate-600' };
+const fmtValorMeta = (tipo, v) => (v == null ? '—' : tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v));
+const fmtMetaPainel = (i) => (i.meta == null ? 'Sem meta' : (i.direcao === 'max' ? '≥ ' : '≤ ') + i.meta + (i.tipo === 'pct' ? '%' : ''));
+
+function PainelMetasPage() {
+  const [ano, setAno] = useState(new Date().getFullYear());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    setLoading(true);
+    api.getMetasPainel(ano).then(setData).catch(e => setErr(e.message)).finally(() => setLoading(false));
+  }, [ano]);
+
+  if (loading) return <Loading />;
+  if (err) return <ErrorMsg msg={err} />;
+
+  const anos = [...new Set([new Date().getFullYear(), ...data.anos])].sort((a, b) => b - a);
+  // assunto → indicador → { definição do último mês fechado, valores por mês }
+  const grupos = {};
+  data.itens.forEach(i => {
+    const ind = ((grupos[i.assunto] = grupos[i.assunto] || {})[i.chave] = grupos[i.assunto][i.chave] || { meses: {} });
+    Object.assign(ind, { chave: i.chave, rotulo: i.rotulo, tipo: i.tipo, direcao: i.direcao, ordem: i.ordem, meta: i.meta });
+    ind.meses[i.mes] = i;
+  });
+  const fechados = [...new Set(data.itens.map(i => i.mes))].length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Painel de Metas</h1>
+          <p className="text-slate-400 text-sm mt-1">Indicadores por assunto, mês a mês e acumulado do ano (média dos meses fechados)</p>
+        </div>
+        <label className="block sm:w-40">
+          <span className="text-sm text-slate-400 mb-1 block">Ano</span>
+          <select value={ano} onChange={e => setAno(Number(e.target.value))} className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none">
+            {anos.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {['ok', 'warn', 'crit', 'na'].map(s => <CelPill key={s} cls={CEL_STATUS_COLOR[s]}>{ROTULO_STATUS[s]}</CelPill>)}
+        <span className="text-slate-500 ml-1">Cada mês mostra os valores gravados em “Fechar mês”, comparados com a meta vigente naquele mês.</span>
+      </div>
+
+      {Object.keys(grupos).length === 0 ? (
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">
+          Nenhum mês fechado em {ano}. Na página Celulares, use “Fechar mês” para gravar os indicadores do relatório atual.
+        </div>
+      ) : Object.entries(grupos).map(([assunto, inds]) => {
+        const cfg = PAINEL_ASSUNTOS[assunto] || { titulo: assunto, status: () => 'na' };
+        return (
+          <div key={assunto} className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between gap-2">
+              <h2 className="text-white font-semibold">{cfg.titulo}</h2>
+              <span className="text-xs text-slate-500">{fechados} {fechados === 1 ? 'mês fechado' : 'meses fechados'} em {ano}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-slate-700 text-slate-400 text-left">
+                  <th className="px-3 py-3 font-medium min-w-[220px]">Indicador</th>
+                  <th className="px-3 py-3 font-medium whitespace-nowrap">Meta</th>
+                  {MONTHS.map(m => <th key={m} className="px-2 py-3 font-medium text-center">{m}</th>)}
+                  <th className="px-3 py-3 font-medium text-center border-l border-slate-700">Acumulado</th>
+                </tr></thead>
+                <tbody>
+                  {Object.values(inds).sort((a, b) => a.ordem - b.ordem).map(ind => {
+                    const vals = Object.values(ind.meses).map(m => m.valor).filter(v => v != null);
+                    const media = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+                    const stAcum = cfg.status(ind.chave, media, ind.meta);
+                    return (
+                      <tr key={ind.chave} className="border-b border-slate-700/50 hover:bg-slate-700/20">
+                        <td className="px-3 py-2.5 text-white">{ind.rotulo}</td>
+                        <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{fmtMetaPainel(ind)}</td>
+                        {MONTHS.map((_, idx) => {
+                          const m = ind.meses[idx + 1];
+                          const st = m ? cfg.status(ind.chave, m.valor, m.meta) : 'nodata';
+                          return (
+                            <td key={idx} className="px-1 py-1.5 text-center">
+                              <div title={m ? `${ROTULO_STATUS[st]} · meta ${fmtMetaPainel(m)} · fechado por ${m.fechado_por || '—'} em ${fmtDateTime(m.fechado_em && m.fechado_em.replace(' ', 'T') + 'Z')}` : 'Mês não fechado'}
+                                className={`rounded-md px-2 py-1.5 font-mono text-xs whitespace-nowrap ${PAINEL_CELULA[st]}`}>{m ? fmtValorMeta(ind.tipo, m.valor) : '·'}</div>
+                            </td>
+                          );
+                        })}
+                        <td className="px-2 py-1.5 text-center border-l border-slate-700">
+                          <div title={ROTULO_STATUS[stAcum]} className={`rounded-md px-2 py-1.5 font-mono text-xs font-semibold whitespace-nowrap ${PAINEL_CELULA[stAcum]}`}>{fmtValorMeta(ind.tipo, media)}</div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ═══════════ APP ═══════════ */
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'metas', label: 'Painel de Metas', icon: Target },
   { key: 'assets', label: 'Ativos', icon: Monitor },
   { key: 'telecom', label: 'Linhas Móveis', icon: Smartphone },
   { key: 'celulares', label: 'Celulares', icon: TabletSmartphone },
@@ -3887,6 +4021,7 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case 'dashboard': return <Dashboard />;
+      case 'metas': return <PainelMetasPage />;
       case 'assets': return <Assets user={user} />;
       case 'telecom': return <TelecomPage user={user} />;
       case 'celulares': return user && user.role === 'admin' ? <CelularesPage /> : <Dashboard />;

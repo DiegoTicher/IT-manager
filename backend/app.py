@@ -93,6 +93,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_c_end ON contracts(end_date);
     CREATE TABLE IF NOT EXISTS celulares_relatorio (id INTEGER PRIMARY KEY CHECK(id = 1), base TEXT NOT NULL, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), dispositivos TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS celulares_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS metas_mensais (id TEXT PRIMARY KEY, assunto TEXT NOT NULL, chave TEXT NOT NULL, rotulo TEXT NOT NULL, tipo TEXT NOT NULL, direcao TEXT NOT NULL, ordem INTEGER DEFAULT 0, ano INTEGER NOT NULL, mes INTEGER NOT NULL CHECK(mes BETWEEN 1 AND 12), valor REAL, meta REAL, fechado_por TEXT, fechado_em TEXT DEFAULT (datetime('now')), UNIQUE(assunto, chave, ano, mes));
+    CREATE INDEX IF NOT EXISTS idx_mm_ano ON metas_mensais(ano);
     """)
     # Migracao simples para bases existentes
     try:
@@ -985,6 +987,39 @@ def put_celulares_metas():
     for chave, meta in d.items():
         execute_db("INSERT OR REPLACE INTO celulares_metas(chave, meta, atualizado_em) VALUES(?,?,datetime('now'))", (chave, meta))
     return success(message="Metas salvas")
+
+# ─────────── PAINEL DE METAS ───────────
+# Valores mensais por assunto, gravados no "fechamento do mes". O acumulado do ano
+# (media dos meses) e o status de cada celula sao calculados no frontend.
+METAS_ASSUNTOS = {"celulares": CELULARES_METAS}
+
+@app.route("/api/metas-painel", methods=["GET"])
+@auth_required
+def get_metas_painel():
+    ano = request.args.get("ano", type=int) or datetime.now().year
+    itens = query_db("SELECT assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em FROM metas_mensais WHERE ano=? ORDER BY assunto, ordem, mes", [ano])
+    anos = [r["ano"] for r in query_db("SELECT DISTINCT ano FROM metas_mensais ORDER BY ano DESC")]
+    return success({"ano": ano, "anos": anos, "itens": itens})
+
+@app.route("/api/metas-painel/fechamento", methods=["POST"])
+@auth_required
+def fechar_mes_metas():
+    if g.user["role"] != "admin": return error("Acesso restrito para administradores", 403)
+    d = request.json or {}
+    assunto = d.get("assunto"); ano = d.get("ano"); mes = d.get("mes"); itens = d.get("itens") or []
+    if assunto not in METAS_ASSUNTOS: return error("Assunto desconhecido")
+    if not isinstance(ano, int) or not isinstance(mes, int) or not 1 <= mes <= 12: return error("Mes ou ano invalido")
+    for i in itens:
+        if i.get("chave") not in METAS_ASSUNTOS[assunto]: return error(f"Indicador desconhecido: {i.get('chave')}")
+        for campo in ("valor", "meta"):
+            if i.get(campo) is not None and not isinstance(i.get(campo), (int, float)): return error(f"Valor invalido em {i.get('chave')}")
+    if not itens: return error("Nenhum indicador informado")
+    # Fechar de novo o mesmo mes substitui o fechamento anterior
+    execute_db("DELETE FROM metas_mensais WHERE assunto=? AND ano=? AND mes=?", (assunto, ano, mes))
+    for ordem, i in enumerate(itens):
+        execute_db("INSERT INTO metas_mensais(id, assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (gen_id(), assunto, i["chave"], i.get("rotulo") or i["chave"], i.get("tipo") or "n", i.get("direcao") or "min", ordem, ano, mes, i.get("valor"), i.get("meta"), g.user["username"]))
+    return success(message=f"Mes {mes:02d}/{ano} fechado")
 
 # ─────────── TELECOM / MOBILE LINES ───────────
 

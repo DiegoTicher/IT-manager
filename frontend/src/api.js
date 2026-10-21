@@ -88,6 +88,9 @@ export const api={
   saveCelularesRelatorio:(d)=>req('/celulares/relatorio',{method:'PUT',body:d}),
   getCelularesMetas:()=>req('/celulares/metas'),
   saveCelularesMetas:(d)=>req('/celulares/metas',{method:'PUT',body:d}),
+  // Painel de Metas
+  getMetasPainel:(ano)=>req('/metas-painel?ano='+(ano||new Date().getFullYear())),
+  fecharMesMetas:(d)=>req('/metas-painel/fechamento',{method:'POST',body:d}),
   // Telecom (Mobile Lines & Audits)
   listMobileLines:(p)=>req('/telecom/lines?'+new URLSearchParams(p)),
   getMobileLine:(id)=>req('/telecom/lines/'+id),
