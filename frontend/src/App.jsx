@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   LayoutDashboard, Monitor, FileKey, DollarSign, Menu, X, Plus, Search,
   Trash2, ChevronDown, AlertTriangle, CheckCircle, Clock, Server,
@@ -6,13 +6,17 @@ import {
   TrendingUp, Package, Shield, RefreshCw, Building2, Users, ArrowLeft,
   MessageSquare, Wrench, Send, Eye, ClipboardCheck, CalendarDays,
   MapPin, UserCheck, ChevronRight, CircleDot, Edit3, XCircle, CheckCircle2,
-  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen
+  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen, TabletSmartphone
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart as RePieChart, Pie, Cell, Legend
 } from 'recharts';
 import api from './api';
+import {
+  lerRelatorioPulsus, calcularIndicadores, statusMeta, analisarChips, analisarModelos, analisarVersoes,
+  METAS_PADRAO, ROTULO_STATUS, nomeModelo, diasSemSync, quantidadeChips
+} from './lib/pulsus-indicadores';
 
 /* ───────── helpers ───────── */
 const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -2874,11 +2878,384 @@ function TelecomPage({ user }) {
   );
 }
 
+/* ═══════════ CELULARES (PAINEL PULSUS MDM) ═══════════ */
+// Todo cálculo vem de lib/pulsus-indicadores.ts (regras em INDICADORES.md do pacote de integração).
+const CEL_STATUS_COLOR = { ok: 'bg-emerald-500/20 text-emerald-400', warn: 'bg-amber-500/20 text-amber-400', crit: 'bg-red-500/20 text-red-400', na: 'bg-slate-500/20 text-slate-400', nodata: 'bg-slate-500/20 text-slate-400' };
+const CEL_PROB_COLOR = { parado: 'bg-red-500/15 text-red-300', usuario: 'bg-violet-500/15 text-violet-300', patrimonio: 'bg-amber-500/15 text-amber-300', frota: 'bg-amber-500/15 text-amber-300', duplicado: 'bg-rose-500/15 text-rose-300', numero: 'bg-cyan-500/15 text-cyan-300', divergencia: 'bg-pink-500/15 text-pink-300', ciclo: 'bg-slate-500/20 text-slate-300', status: 'bg-slate-500/20 text-slate-400' };
+const CEL_PROB_DO_KPI = { sync24: 'semsync', parados: 'parado', cadastro: 'cadastro', duplicidades: 'duplicado', semNumero: 'numero', divergencia: 'divergencia', fimCiclo: 'ciclo', reserva: 'reserva' };
+const CEL_FILTROS = [['todos', 'Todos'], ['comproblema', 'Com problema'], ['parado', 'Parados +7 dias'], ['semsync', 'Sem sync em 24h'], ['cadastro', 'Cadastro incompleto'], ['usuario', 'Sem usuário identificado'], ['patrimonio', 'Patrimônio'], ['frota', 'Nº Frota'], ['duplicado', 'Duplicados e inválidos'], ['numero', 'Sem número'], ['divergencia', 'Chip × SMS'], ['ciclo', 'Fim de ciclo'], ['reserva', 'Reserva'], ['comnumero', 'Com número'], ['comchip', 'Com chip'], ['doischips', '2 chips']];
+const CEL_SITUACAO_VERSAO = { atual: ['Mais recente', 'bg-emerald-500/20 text-emerald-400'], anterior: ['Versão anterior', 'bg-slate-500/20 text-slate-400'], fim: ['Fim de ciclo', 'bg-red-500/20 text-red-400'], outro: ['Computador', 'bg-slate-500/20 text-slate-400'] };
+const fmtPctCel = v => (v == null || isNaN(v) ? '—' : (v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + '%');
+const fmtNCel = v => (v == null || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+const fmtPctInt = v => (v == null || isNaN(v) ? '—' : Math.round(v) + '%');
+const fmtAnos = v => (v == null ? '—' : v < 1 ? Math.round(v * 12) + ' meses' : v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' anos');
+const metasDoForm = m => Object.fromEntries(Object.keys(METAS_PADRAO).map(k => [k, k in m ? (m[k] ?? '') : METAS_PADRAO[k].meta]));
+
+async function lerArquivoCSV(file) {
+  const buf = await file.arrayBuffer();
+  let text = new TextDecoder('utf-8').decode(buf);
+  if (text.includes('�')) text = new TextDecoder('windows-1252').decode(buf);
+  return text;
+}
+
+function CelPill({ cls, children }) {
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${cls}`}>{children}</span>;
+}
+
+function CelPartes({ itens }) {
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 mt-3 pt-3 border-t border-slate-700/50 text-xs">
+      {itens.map(([l, v], i) => [<span key={'l' + i} className="text-slate-400">{l}</span>, <span key={'v' + i} className="text-white font-medium text-right font-mono">{v}</span>])}
+    </div>
+  );
+}
+
+function CelCard({ titulo, status, valor, linhas = [], partes, onVer }) {
+  return (
+    <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50 hover:bg-slate-800/80 transition flex flex-col">
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <span className="text-slate-400 text-sm font-medium">{titulo}</span>
+        {status && <CelPill cls={CEL_STATUS_COLOR[status]}>{ROTULO_STATUS[status]}</CelPill>}
+      </div>
+      <p className="text-2xl font-bold text-white">{valor}</p>
+      {linhas.filter(Boolean).map((l, i) => <p key={i} className="text-xs text-slate-500 mt-1">{l}</p>)}
+      {partes && partes.length > 0 && <CelPartes itens={partes} />}
+      <div className="flex-1" />
+      {onVer && <button onClick={onVer} className="mt-3 self-end text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1">Ver aparelhos <ChevronRight size={14} /></button>}
+    </div>
+  );
+}
+
+function CelBarra({ qtd, max, pct, cor = 'bg-blue-500' }) {
+  return (
+    <div className="flex items-center gap-2 min-w-[150px]">
+      <div className="flex-1 h-2 rounded bg-slate-700/60"><div className={`h-2 rounded ${cor}`} style={{ width: `${(qtd / max) * 100}%` }} /></div>
+      <span className="font-mono text-white">{qtd}</span>
+      <span className="font-mono text-xs text-slate-500">{Math.round(pct * 100)}%</span>
+    </div>
+  );
+}
+
+function CelSecao({ titulo, info, acoes, children }) {
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+        <div><h2 className="text-lg font-semibold text-white">{titulo}</h2>{info && <p className="text-slate-500 text-xs mt-0.5">{info}</p>}</div>
+        {acoes}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function CelularesPage() {
+  const [rel, setRel] = useState(null);
+  const [metas, setMetas] = useState({});
+  const [metasForm, setMetasForm] = useState(metasDoForm({}));
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
+  const [msg, setMsg] = useState(null);
+  const [metasMsg, setMetasMsg] = useState('');
+  const [importando, setImportando] = useState(false);
+  const [arrastando, setArrastando] = useState(false);
+  const [grupo, setGrupo] = useState('');
+  const [filtro, setFiltro] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const listaRef = useRef(null);
+
+  useEffect(() => {
+    Promise.all([api.getCelularesRelatorio(), api.getCelularesMetas()])
+      .then(([r, m]) => { setRel(r); setMetas(m); setMetasForm(metasDoForm(m)); })
+      .catch(e => setLoadErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const relatorio = useMemo(() => (rel ? { base: rel.base, dispositivos: rel.dispositivos } : null), [rel]);
+  const grupos = useMemo(() => (relatorio ? [...new Set(relatorio.dispositivos.map(d => d.grupo))].sort((a, b) => a.localeCompare(b, 'pt-BR')) : []), [relatorio]);
+  const calc = useMemo(() => relatorio && {
+    k: calcularIndicadores(relatorio, grupo),
+    chips: analisarChips(relatorio, grupo),
+    modelos: analisarModelos(relatorio, grupo),
+    versoes: analisarVersoes(relatorio, grupo),
+  }, [relatorio, grupo]);
+
+  const importar = async (file) => {
+    if (!file) return;
+    setMsg(null); setImportando(true);
+    try {
+      const lido = lerRelatorioPulsus(await lerArquivoCSV(file));
+      if (!lido.dispositivos.length) throw new Error('Nenhum aparelho encontrado no arquivo.');
+      await api.saveCelularesRelatorio({ base: lido.base, arquivo: file.name, dispositivos: lido.dispositivos });
+      setRel(await api.getCelularesRelatorio());
+      setGrupo(''); setFiltro('todos'); setBusca('');
+      setMsg({ tipo: 'ok', texto: `Painel atualizado: ${lido.dispositivos.length} aparelhos, relatório de ${fmtDateTime(lido.base)}.` });
+    } catch (e) {
+      setMsg({ tipo: 'err', texto: e.message || String(e) });
+    } finally {
+      setImportando(false);
+    }
+  };
+
+  const salvarMetas = async () => {
+    const novas = Object.fromEntries(Object.keys(METAS_PADRAO).map(k => { const v = metasForm[k]; return [k, v === '' || v == null ? null : Number(v)]; }));
+    if (Object.values(novas).some(v => v != null && isNaN(v))) { setMetasMsg('Use apenas números nas metas.'); return; }
+    try {
+      await api.saveCelularesMetas(novas);
+      setMetas(novas); setMetasMsg('Metas salvas.');
+    } catch (e) { setMetasMsg('Não foi possível salvar: ' + e.message); }
+  };
+
+  const verAparelhos = (f, b = '') => {
+    setFiltro(f); setBusca(b);
+    listaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const metaTxt = (chave) => {
+    const d = METAS_PADRAO[chave], m = chave in metas ? metas[chave] : d.meta;
+    if (m == null) return 'Meta não definida';
+    return 'Meta ' + (d.direcao === 'max' ? '≥ ' : '≤ ') + m + (d.tipo === 'pct' ? '%' : '');
+  };
+
+  const zonaImportacao = (
+    <div
+      onDragOver={e => { e.preventDefault(); setArrastando(true); }}
+      onDragLeave={() => setArrastando(false)}
+      onDrop={e => { e.preventDefault(); setArrastando(false); importar(e.dataTransfer?.files?.[0]); }}
+      className={`flex flex-col sm:flex-row sm:items-center gap-4 p-5 border-2 border-dashed rounded-xl transition ${arrastando ? 'border-blue-500 bg-blue-500/5' : 'border-slate-700'}`}>
+      <div className="p-3 rounded-lg bg-blue-500/20 text-blue-400 self-start"><Upload size={20} /></div>
+      <p className="flex-1 text-sm text-slate-400"><span className="text-white font-medium">Atualizar com novo relatório:</span> arraste aqui o CSV exportado do Pulsus (devices_report) ou escolha o arquivo. A página passa a mostrar só o relatório mais recente.</p>
+      <label className={`flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition cursor-pointer ${importando ? 'opacity-50 pointer-events-none' : ''}`}>
+        {importando ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />} {importando ? 'Importando...' : 'Escolher CSV'}
+        <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { importar(e.target.files[0]); e.target.value = ''; }} />
+      </label>
+    </div>
+  );
+
+  const aviso = msg && (
+    <div className={`flex items-start gap-2 px-4 py-3 rounded-lg text-sm ${msg.tipo === 'ok' ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-red-500/10 text-red-300 ring-1 ring-red-500/30'}`}>
+      {msg.tipo === 'ok' ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" />}<span>{msg.texto}</span>
+    </div>
+  );
+
+  if (loading) return <Loading />;
+  if (loadErr) return <ErrorMsg msg={loadErr} />;
+
+  const cabecalho = (
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-bold text-white">Celulares</h1>
+        <p className="text-slate-400 text-sm mt-1">
+          {rel ? `Situação conforme o relatório do Pulsus de ${fmtDateTime(rel.base)} · ${rel.dispositivos.length} aparelhos` : 'Importe o relatório de dispositivos do Pulsus para ver os indicadores.'}
+        </p>
+        {rel && <p className="text-slate-500 text-xs mt-1">{rel.arquivo || 'Arquivo sem nome'} · importado por {rel.importado_por || '—'} em {fmtDateTime(rel.importado_em && rel.importado_em.replace(' ', 'T') + 'Z')}</p>}
+      </div>
+      {rel && <div className="sm:w-64"><Select label="Grupo" options={grupos} value={grupo} onChange={e => { setGrupo(e.target.value); setFiltro('todos'); }} /></div>}
+    </div>
+  );
+
+  const formMetas = (
+    <CelSecao titulo="Metas" info="As metas valem para todos os grupos. Percentuais em %. Deixe em branco para não ter meta.">
+      <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4">
+          {Object.entries(METAS_PADRAO).map(([k, d]) => (
+            <Input key={k} type="number" step="any" label={`${d.rotulo} (${d.direcao === 'max' ? 'mínimo' : 'máximo'}${d.tipo === 'pct' ? ', %' : ''})`}
+              value={metasForm[k]} onChange={e => { setMetasForm({ ...metasForm, [k]: e.target.value }); setMetasMsg(''); }} />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mt-2">
+          <button onClick={salvarMetas} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Salvar metas</button>
+          <button onClick={() => { setMetasForm(metasDoForm({})); setMetasMsg('Valores padrão carregados. Clique em Salvar para aplicar.'); }} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Restaurar padrão</button>
+          {metasMsg && <span className="text-xs text-slate-400">{metasMsg}</span>}
+        </div>
+      </div>
+    </CelSecao>
+  );
+
+  if (!calc) {
+    return (
+      <div className="space-y-6">
+        {cabecalho}{zonaImportacao}{aviso}
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 text-center text-slate-500 text-sm">Nenhum relatório importado ainda. Use “Escolher CSV” acima.</div>
+        {formMetas}
+      </div>
+    );
+  }
+
+  const { k, chips, modelos, versoes } = calc;
+  const st = chave => statusMeta(chave, k[chave].valor, metas);
+  const cad = k.cadastro.partes;
+  const pcAtivos = n => (chips.ativos ? Math.round((n / chips.ativos) * 100) + '%' : '—');
+
+  // Lista de aparelhos
+  const sets = { semsync: new Set(k.sync24.ids), cadastro: new Set(k.cadastro.ids), reserva: new Set(k.reserva.ids), duplicado: new Set(k.duplicidades.ids) };
+  const doGrupo = relatorio.dispositivos.filter(d => !grupo || d.grupo === grupo);
+  const temFiltro = (d, chave) => {
+    const ps = k.problemas[d.id] || [];
+    if (chave === 'todos') return true;
+    if (chave === 'comproblema') return ps.length > 0;
+    if (chave === 'comnumero') return !!(d.t1 || d.ts) && d.status === 'active';
+    if (chave === 'comchip') return quantidadeChips(d) >= 1 && d.status === 'active';
+    if (chave === 'doischips') return quantidadeChips(d) >= 2 && d.status === 'active';
+    if (sets[chave]) return sets[chave].has(d.id);
+    return ps.some(p => p.tipo === chave);
+  };
+  const contagem = Object.fromEntries(CEL_FILTROS.map(([c]) => [c, doGrupo.filter(d => temFiltro(d, c)).length]));
+  const q = busca.trim().toLowerCase();
+  const aparelhos = doGrupo
+    .filter(d => temFiltro(d, filtro))
+    .filter(d => !q || [d.id, d.nome, d.pat, d.frota, d.t1, d.ts, d.imei, d.iccid, d.grupo, nomeModelo(d), d.cod, d.plat === 'Android' ? 'Android ' + d.os + ';' : d.os].join(' ').toLowerCase().includes(q))
+    .sort((a, b) => (k.problemas[b.id]?.length || 0) - (k.problemas[a.id]?.length || 0) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  const ultSync = d => { const x = diasSemSync(d, relatorio.base); return x <= 1 ? 'Hoje' : Math.floor(x) + ' d'; };
+
+  const maxModelo = Math.max(...modelos.map(m => m.qtd), 1);
+  const situacaoModelo = (m) => {
+    const tags = [];
+    if (m.fimCiclo) tags.push(['crit', 'Fim de ciclo' + (m.fimCiclo < m.qtd ? ` (${m.fimCiclo})` : '')]);
+    if (m.parados / m.qtd >= 0.2) tags.push(['warn', `${m.parados} parados`]);
+    if (m.armLivre != null && m.armLivre < 30) tags.push(['warn', 'Pouco espaço']);
+    else if (m.poucoEspaco) tags.push(['warn', `${m.poucoEspaco} com pouco espaço`]);
+    if (m.plataforma === 'Android' && m.ramGB && m.ramGB < 3) tags.push(['warn', 'RAM baixa']);
+    if (!tags.length) tags.push(['ok', 'Em dia']);
+    return <div className="flex flex-wrap gap-1">{tags.map(([s, t]) => <CelPill key={t} cls={CEL_STATUS_COLOR[s]}>{t}</CelPill>)}</div>;
+  };
+  const maxVersao = Math.max(...versoes.map(v => v.qtd), 1);
+  const th = 'px-3 py-3 font-medium whitespace-nowrap';
+  const td = 'px-3 py-2.5';
+
+  return (
+    <div className="space-y-8">
+      <div className="space-y-4">{cabecalho}{zonaImportacao}{aviso}</div>
+
+      <CelSecao titulo="Indicadores do parque" info={`${k.ativos} aparelhos ativos${k.inativos ? ` · ${k.inativos} com wipe/inativos` : ''}${grupo ? ' · ' + grupo : ''}`}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <CelCard titulo={METAS_PADRAO.sync24.rotulo} status={st('sync24')} valor={fmtPctCel(k.sync24.valor)} linhas={[metaTxt('sync24'), `${k.sync24.n} de ${k.sync24.de} ativos`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.sync24)} />
+          <CelCard titulo={METAS_PADRAO.parados.rotulo} status={st('parados')} valor={fmtNCel(k.parados.valor)} linhas={[metaTxt('parados')]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.parados)} />
+          <CelCard titulo={METAS_PADRAO.cadastro.rotulo} status={st('cadastro')} valor={fmtPctCel(k.cadastro.valor)} linhas={[metaTxt('cadastro')]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.cadastro)}
+            partes={[['Usuário identificado', `${cad.usuario}/${k.ativos}`], ['Patrimônio válido', `${cad.patrimonio}/${k.ativos}`], ['Número nos aparelhos com chip', `${cad.numero}/${cad.chips}`], ...(cad.exigeFrota ? [['Nº Frota válido (Tracking)', `${cad.frota}/${cad.exigeFrota}`]] : [])]} />
+          <CelCard titulo={METAS_PADRAO.duplicidades.rotulo} status={st('duplicidades')} valor={fmtNCel(k.duplicidades.valor)} linhas={[metaTxt('duplicidades'), 'Patrimônio, Nº Frota ou chip repetido, ou valor inválido']} onVer={() => verAparelhos(CEL_PROB_DO_KPI.duplicidades)} />
+          <CelCard titulo={METAS_PADRAO.semNumero.rotulo} status={st('semNumero')} valor={fmtNCel(k.semNumero.valor)} linhas={[metaTxt('semNumero')]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.semNumero)} />
+          <CelCard titulo={METAS_PADRAO.divergencia.rotulo} status={st('divergencia')} valor={fmtNCel(k.divergencia.valor)} linhas={[metaTxt('divergencia'), 'Sinal de chip trocado de aparelho']} onVer={() => verAparelhos(CEL_PROB_DO_KPI.divergencia)} />
+          <CelCard titulo={METAS_PADRAO.fimCiclo.rotulo} status={st('fimCiclo')} valor={fmtPctCel(k.fimCiclo.valor)} linhas={[metaTxt('fimCiclo'), `${k.fimCiclo.n} de ${k.fimCiclo.de} Android`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.fimCiclo)} />
+          <CelCard titulo={METAS_PADRAO.reserva.rotulo} status={st('reserva')} valor={k.reserva.total ? fmtPctCel(k.reserva.valor) : '—'} linhas={[metaTxt('reserva'), `${k.reserva.prontos} de ${k.reserva.total} reservas sincronizando e com bateria ≥ 50%`]} onVer={() => verAparelhos(CEL_PROB_DO_KPI.reserva)} />
+        </div>
+      </CelSecao>
+
+      <CelSecao titulo="Chips e números" info={`${chips.ativos} aparelhos ativos${grupo ? ' · ' + grupo : ''}`}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <CelCard titulo="Aparelhos com número cadastrado" valor={fmtNCel(chips.comNumero)} linhas={[`${pcAtivos(chips.comNumero)} dos ativos · ${chips.numerosDistintos} números diferentes`]} onVer={() => verAparelhos('comnumero')}
+            partes={[['Número lido do chip', chips.numeroDoChip], ['Número informado por SMS', chips.numeroPorSMS], ['Com os dois', chips.numeroNosDois], ['Sem número', chips.ativos - chips.comNumero]]} />
+          <CelCard titulo="Aparelhos com chip" valor={fmtNCel(chips.comChip)} linhas={[`${pcAtivos(chips.comChip)} dos ativos · ${chips.totalChips} chips no total`]} onVer={() => verAparelhos('comchip')}
+            partes={[['Sem chip (só Wi-Fi)', chips.semChip], ['Aceitam 2 chips', chips.aceitam2Chips]]} />
+          <CelCard titulo="Aparelhos com 2 chips" valor={fmtNCel(chips.com2Chips)} linhas={[`${pcAtivos(chips.com2Chips)} dos ativos`]} onVer={() => verAparelhos('doischips')}
+            partes={chips.listaCom2Chips.map(d => [`#${d.id} ${d.nome || '(sem nome)'}`, d.operadoras])} />
+          <CelCard titulo="Chips por operadora" valor={fmtNCel(chips.totalChips)} linhas={['chips encontrados nos aparelhos']} partes={chips.operadoras} />
+        </div>
+      </CelSecao>
+
+      <CelSecao titulo="Modelos" info={`${modelos.length} modelos · ${modelos.reduce((a, m) => a + m.qtd, 0)} aparelhos ativos · ${modelos.reduce((a, m) => a + m.fimCiclo, 0)} em fim de ciclo`}>
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-700 text-slate-400 text-left">
+              {['Modelo', 'Quantidade', 'Sistema', 'RAM · Armaz.', 'Tempo no MDM', 'Sinc. 24h', 'Parados +7d', 'Armaz. livre', 'RAM livre', 'Bateria', 'Situação', 'Onde está'].map(h => <th key={h} className={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {modelos.map(m => (
+                <tr key={m.nome} tabIndex={0} onClick={() => verAparelhos('todos', m.nome)} onKeyDown={e => e.key === 'Enter' && verAparelhos('todos', m.nome)} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition cursor-pointer text-slate-300 align-top">
+                  <td className={td}><p className="text-white font-medium whitespace-nowrap">{m.nome}</p><p className="text-xs text-slate-500">{m.codigos}</p></td>
+                  <td className={td}><CelBarra qtd={m.qtd} max={maxModelo} pct={m.pct} /></td>
+                  <td className={`${td} whitespace-nowrap`}>{m.versoes.map(([v, n]) => <div key={v}>{/^\d+$/.test(v) ? 'Android ' + v : v.replace('Microsoft ', '')}{m.versoes.length > 1 ? ` (${n})` : ''}</div>)}</td>
+                  <td className={`${td} whitespace-nowrap font-mono`}>{m.ramGB ? fmtNCel(m.ramGB) + ' GB' : '—'} · {m.armazenamentoGB ? m.armazenamentoGB + ' GB' : '—'}</td>
+                  <td className={`${td} whitespace-nowrap`}>{fmtAnos(m.anosNoMDM)}</td>
+                  <td className={`${td} font-mono`}>{fmtPctInt(m.sync24 * 100)}</td>
+                  <td className={`${td} font-mono`}>{m.parados || '—'}</td>
+                  <td className={`${td} font-mono`}>{fmtPctInt(m.armLivre)}</td>
+                  <td className={`${td} font-mono`}>{fmtPctInt(m.ramLivre)}</td>
+                  <td className={`${td} font-mono`}>{fmtPctInt(m.bateria)}</td>
+                  <td className={td}>{situacaoModelo(m)}</td>
+                  <td className={`${td} text-xs whitespace-nowrap`}>{m.grupos.slice(0, 3).map(([g, n]) => <div key={g}>{g} <span className="text-slate-500">{n}</span></div>)}{m.grupos.length > 3 && <div className="text-slate-500">+{m.grupos.length - 3} grupos</div>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-slate-500">Armazenamento, memória e bateria são medianas no momento da última sincronização. Tempo no MDM conta a partir da ativação no Pulsus. Clique em um modelo para ver os aparelhos dele.</p>
+      </CelSecao>
+
+      <CelSecao titulo="Versões do sistema" info={`${versoes.filter(v => v.situacao === 'fim').reduce((a, v) => a + v.qtd, 0)} em fim de ciclo · ${versoes.reduce((a, v) => a + v.podeAtualizar, 0)} com atualização pendente`}>
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-700 text-slate-400 text-left">
+              {['Versão', 'Quantidade', 'Situação', 'Modelos', 'Sinc. 24h', 'Parados +7d', 'Pode atualizar'].map(h => <th key={h} className={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {versoes.map(v => (
+                <tr key={v.nome} tabIndex={0} onClick={() => verAparelhos('todos', v.nome)} onKeyDown={e => e.key === 'Enter' && verAparelhos('todos', v.nome)} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition cursor-pointer text-slate-300">
+                  <td className={`${td} text-white font-medium whitespace-nowrap`}>{v.nome}</td>
+                  <td className={td}><CelBarra qtd={v.qtd} max={maxVersao} pct={v.pct} cor={v.situacao === 'fim' ? 'bg-red-500' : 'bg-blue-500'} /></td>
+                  <td className={td}><CelPill cls={CEL_SITUACAO_VERSAO[v.situacao][1]}>{CEL_SITUACAO_VERSAO[v.situacao][0]}</CelPill></td>
+                  <td className={`${td} text-xs`}>{v.modelos.map(([m, n]) => `${m} (${n})`).join(' · ')}</td>
+                  <td className={`${td} font-mono`}>{Math.round(v.sync24 * 100)}%</td>
+                  <td className={`${td} font-mono`}>{v.parados || '—'}</td>
+                  <td className={td}>{v.podeAtualizar ? <CelPill cls={CEL_STATUS_COLOR.warn}>{v.podeAtualizar}</CelPill> : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-slate-500">Fim de ciclo: Android 12 ou anterior. “Pode atualizar” conta aparelhos abaixo da versão mais alta já vista no mesmo modelo. Clique em uma versão para ver os aparelhos.</p>
+      </CelSecao>
+
+      <div ref={listaRef} className="scroll-mt-4">
+        <CelSecao titulo="Aparelhos" info={`${aparelhos.length} de ${doGrupo.length} aparelhos`}
+          acoes={<div className="relative sm:w-80"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nome, ID, patrimônio, telefone, modelo" className="w-full bg-slate-900/60 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>}>
+          <div className="flex flex-wrap gap-2">
+            {CEL_FILTROS.map(([c, l]) => (
+              <button key={c} onClick={() => setFiltro(c)} aria-pressed={filtro === c} className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filtro === c ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 ring-1 ring-slate-700 hover:text-white'}`}>{l} ({contagem[c]})</button>
+            ))}
+          </div>
+          <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-auto max-h-[620px]">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-800"><tr className="border-b border-slate-700 text-slate-400 text-left">
+                {['ID', 'Usuário', 'Grupo', 'Modelo', 'Android', 'Patrimônio', 'Nº Frota', 'Telefone', 'Chips', 'Últ. sync', 'Bateria', 'Problemas'].map(h => <th key={h} className={th}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {aparelhos.map(d => {
+                  const ps = k.problemas[d.id] || [], nc = quantidadeChips(d);
+                  return (
+                    <tr key={d.id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition text-slate-300 align-top">
+                      <td className={`${td} font-mono`}>{d.id}</td>
+                      <td className={`${td} text-white whitespace-nowrap`}>{d.nome || '(sem nome)'}</td>
+                      <td className={`${td} whitespace-nowrap`}>{d.grupo}</td>
+                      <td className={`${td} whitespace-nowrap`}>{nomeModelo(d)}</td>
+                      <td className={`${td} font-mono`}>{d.os}</td>
+                      <td className={`${td} font-mono`}>{d.pat || '—'}</td>
+                      <td className={`${td} font-mono`}>{d.frota || '—'}</td>
+                      <td className={`${td} font-mono whitespace-nowrap`}>{[...new Set([d.n1, d.n2, d.ts].filter(Boolean))].join(' / ') || d.t1 || '—'}</td>
+                      <td className={`${td} whitespace-nowrap`}>{nc ? `${nc} · ${[d.oper1, d.oper2].filter(Boolean).map(o => o.replace(/ BR$/, '')).join(' + ') || '—'}` : '—'}</td>
+                      <td className={`${td} whitespace-nowrap`}>{ultSync(d)}</td>
+                      <td className={`${td} font-mono`}>{d.bat}%</td>
+                      <td className={td}><div className="flex flex-wrap gap-1 min-w-[180px]">{ps.length ? ps.map((p, i) => <span key={i} className={`px-2 py-0.5 rounded text-xs ${CEL_PROB_COLOR[p.tipo]}`}>{p.texto}</span>) : <span className="text-slate-500">—</span>}</div></td>
+                    </tr>
+                  );
+                })}
+                {aparelhos.length === 0 && <tr><td colSpan={12} className="px-4 py-12 text-center text-slate-500">Nenhum aparelho neste filtro.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </CelSecao>
+      </div>
+
+      {formMetas}
+    </div>
+  );
+}
+
 /* ═══════════ APP ═══════════ */
 const NAV = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'assets', label: 'Ativos', icon: Monitor },
   { key: 'telecom', label: 'Linhas Móveis', icon: Smartphone },
+  { key: 'celulares', label: 'Celulares', icon: TabletSmartphone },
   { key: 'licenses', label: 'Licencas', icon: FileKey },
   { key: 'contracts', label: 'Contratos', icon: Briefcase },
   { key: 'budget', label: 'Orcamento', icon: DollarSign },
@@ -2887,6 +3264,8 @@ const NAV = [
   { key: 'knowledge', label: 'Guia & Governança', icon: BookOpen },
   { key: 'users', label: 'Usuários', icon: Users },
 ];
+// Páginas restritas ao perfil admin (Celulares mostra nome, telefone e IMEI de funcionários)
+const NAV_ADMIN = ['users', 'celulares'];
 
 function Login({ onLogin }) {
   const [user, setUser] = useState('');
@@ -3510,6 +3889,7 @@ export default function App() {
       case 'dashboard': return <Dashboard />;
       case 'assets': return <Assets user={user} />;
       case 'telecom': return <TelecomPage user={user} />;
+      case 'celulares': return user && user.role === 'admin' ? <CelularesPage /> : <Dashboard />;
       case 'licenses': return <Licenses user={user} />;
       case 'contracts': return <ContractsPage />;
       case 'budget': return <Budget />;
@@ -3532,7 +3912,7 @@ export default function App() {
           </div>
         </div>
         <nav className="p-3 space-y-1">
-          {NAV.filter(item => item.key !== 'users' || (user && user.role === 'admin')).map(({ key, label, icon: Icon }) => (
+          {NAV.filter(item => !NAV_ADMIN.includes(item.key) || (user && user.role === 'admin')).map(({ key, label, icon: Icon }) => (
             <button key={key} onClick={() => { setPage(key); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition ${page === key ? 'bg-blue-600/20 text-blue-400' : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'}`}>
               <Icon size={18} />{label}

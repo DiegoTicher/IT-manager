@@ -91,6 +91,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_lh_license ON licenses_history(license_id);
     CREATE TABLE IF NOT EXISTS contracts (id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor_id TEXT REFERENCES vendors(id), contract_number TEXT, start_date TEXT, end_date TEXT, monthly_cost REAL DEFAULT 0, sla_details TEXT, document_url TEXT, status TEXT DEFAULT 'Ativo', notes TEXT, created_at TEXT DEFAULT (datetime('now')));
     CREATE INDEX IF NOT EXISTS idx_c_end ON contracts(end_date);
+    CREATE TABLE IF NOT EXISTS celulares_relatorio (id INTEGER PRIMARY KEY CHECK(id = 1), base TEXT NOT NULL, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), dispositivos TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS celulares_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
     """)
     # Migracao simples para bases existentes
     try:
@@ -934,6 +936,55 @@ def update_contract(cid):
 def delete_contract(cid):
     execute_db("DELETE FROM contracts WHERE id=?", [cid])
     return success(message="Contrato excluído")
+
+# ─────────── CELULARES (PAINEL PULSUS MDM) ───────────
+# Os calculos ficam no frontend (src/lib/pulsus-indicadores.ts); aqui so guardamos
+# o relatorio atual (o objeto Relatorio do modulo) e as metas editadas.
+# A pagina mostra nome, telefone e IMEI de funcionarios: acesso restrito a TI (perfil admin).
+CELULARES_METAS = ["sync24", "parados", "cadastro", "duplicidades", "semNumero", "divergencia", "fimCiclo", "reserva"]
+
+def celulares_acesso():
+    return g.user["role"] == "admin"
+
+@app.route("/api/celulares/relatorio", methods=["GET"])
+@auth_required
+def get_celulares_relatorio():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    r = query_db("SELECT base, arquivo, importado_por, importado_em, dispositivos FROM celulares_relatorio WHERE id=1", one=True)
+    if not r: return success(None)
+    r["dispositivos"] = json.loads(r["dispositivos"])
+    return success(r)
+
+@app.route("/api/celulares/relatorio", methods=["PUT"])
+@auth_required
+def put_celulares_relatorio():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    d = request.json or {}
+    base = d.get("base"); disp = d.get("dispositivos")
+    if not base or not isinstance(disp, list) or not disp: return error("Relatorio invalido: informe a data-base e a lista de dispositivos")
+    # Relatorio unico (id=1): um CSV novo substitui o anterior
+    execute_db("INSERT OR REPLACE INTO celulares_relatorio(id, base, arquivo, importado_por, importado_em, dispositivos) VALUES(1,?,?,?,datetime('now'),?)",
+               (base, d.get("arquivo"), g.user["username"], json.dumps(disp, ensure_ascii=False)))
+    return success(message=f"Relatorio salvo: {len(disp)} aparelhos")
+
+@app.route("/api/celulares/metas", methods=["GET"])
+@auth_required
+def get_celulares_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    # So as metas ja salvas; o frontend completa com METAS_PADRAO. meta NULL = "Sem meta".
+    return success({r["chave"]: r["meta"] for r in query_db("SELECT chave, meta FROM celulares_metas")})
+
+@app.route("/api/celulares/metas", methods=["PUT"])
+@auth_required
+def put_celulares_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    d = request.json or {}
+    for chave, meta in d.items():
+        if chave not in CELULARES_METAS: return error(f"Meta desconhecida: {chave}")
+        if meta is not None and not isinstance(meta, (int, float)): return error(f"Meta invalida para {chave}")
+    for chave, meta in d.items():
+        execute_db("INSERT OR REPLACE INTO celulares_metas(chave, meta, atualizado_em) VALUES(?,?,datetime('now'))", (chave, meta))
+    return success(message="Metas salvas")
 
 # ─────────── TELECOM / MOBILE LINES ───────────
 
