@@ -95,6 +95,8 @@ def init_db():
     CREATE TABLE IF NOT EXISTS celulares_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
     CREATE TABLE IF NOT EXISTS metas_mensais (id TEXT PRIMARY KEY, assunto TEXT NOT NULL, chave TEXT NOT NULL, rotulo TEXT NOT NULL, tipo TEXT NOT NULL, direcao TEXT NOT NULL, ordem INTEGER DEFAULT 0, ano INTEGER NOT NULL, mes INTEGER NOT NULL CHECK(mes BETWEEN 1 AND 12), valor REAL, meta REAL, fechado_por TEXT, fechado_em TEXT DEFAULT (datetime('now')), UNIQUE(assunto, chave, ano, mes));
     CREATE INDEX IF NOT EXISTS idx_mm_ano ON metas_mensais(ano);
+    CREATE TABLE IF NOT EXISTS celulares_importacoes (id TEXT PRIMARY KEY, base TEXT NOT NULL, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), aparelhos INTEGER DEFAULT 0, dispositivos TEXT NOT NULL, indicadores TEXT);
+    CREATE INDEX IF NOT EXISTS idx_ci_base ON celulares_importacoes(base);
     """)
     # Migracao simples para bases existentes
     try:
@@ -137,6 +139,16 @@ def init_db():
         db.execute("CREATE TABLE IF NOT EXISTS licenses_history (id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(id) ON DELETE CASCADE, action TEXT NOT NULL, from_value TEXT, to_value TEXT, performed_by TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now')))")
         db.execute("CREATE INDEX IF NOT EXISTS idx_lh_license ON licenses_history(license_id)")
     except: pass
+    try:
+        db.execute("ALTER TABLE metas_mensais ADD COLUMN referencia TEXT")
+    except: pass
+    # O relatorio unico antigo (celulares_relatorio) vira a primeira importacao do historico.
+    # Os indicadores dele sao calculados pela pagina Celulares na primeira abertura.
+    if not db.execute("SELECT 1 FROM celulares_importacoes LIMIT 1").fetchone():
+        old = db.execute("SELECT base, arquivo, importado_por, importado_em, dispositivos FROM celulares_relatorio WHERE id=1").fetchone()
+        if old:
+            db.execute("INSERT INTO celulares_importacoes(id, base, arquivo, importado_por, importado_em, aparelhos, dispositivos) VALUES(?,?,?,?,?,?,?)",
+                       (gen_id(), old[0], old[1], old[2], old[3], len(json.loads(old[4])), old[4]))
 
     # Garante usuário admin padrao admin/admin
     pwd_hash = hashlib.sha256("admin".encode()).hexdigest()
@@ -940,34 +952,100 @@ def delete_contract(cid):
     return success(message="Contrato excluído")
 
 # ─────────── CELULARES (PAINEL PULSUS MDM) ───────────
-# Os calculos ficam no frontend (src/lib/pulsus-indicadores.ts); aqui so guardamos
-# o relatorio atual (o objeto Relatorio do modulo) e as metas editadas.
+# Os calculos ficam no frontend (src/lib/pulsus-indicadores.ts); aqui guardamos cada
+# importacao do CSV (o objeto Relatorio do modulo + os indicadores ja calculados) e as metas.
+# Relatorio atual = importacao com a data-base mais recente. O Painel de Metas usa, em cada
+# mes, a ultima importacao daquele mes (pela data-base).
 # A pagina mostra nome, telefone e IMEI de funcionarios: acesso restrito a TI (perfil admin).
 CELULARES_METAS = ["sync24", "parados", "cadastro", "duplicidades", "semNumero", "divergencia", "fimCiclo"]  # "reserva" retirado da tela
+CEL_ORDEM_IMPORTACAO = "ORDER BY base DESC, importado_em DESC"
 
 def celulares_acesso():
     return g.user["role"] == "admin"
+
+def validar_indicadores(itens):
+    if not isinstance(itens, list) or not itens: return "Nenhum indicador informado"
+    for i in itens:
+        if i.get("chave") not in CELULARES_METAS: return f"Indicador desconhecido: {i.get('chave')}"
+        for campo in ("valor", "meta"):
+            if i.get(campo) is not None and not isinstance(i.get(campo), (int, float)): return f"Valor invalido em {i.get('chave')}"
+    return None
+
+def atualizar_mes_celulares(mes_ref):
+    """Recalcula o mes 'AAAA-MM' do Painel de Metas a partir da ultima importacao do mes."""
+    ano, mes = int(mes_ref[:4]), int(mes_ref[5:7])
+    imp = query_db(f"SELECT id, base, importado_por, importado_em, indicadores FROM celulares_importacoes WHERE substr(base,1,7)=? AND indicadores IS NOT NULL {CEL_ORDEM_IMPORTACAO} LIMIT 1", [mes_ref], one=True)
+    execute_db("DELETE FROM metas_mensais WHERE assunto='celulares' AND ano=? AND mes=?", (ano, mes))
+    if not imp: return
+    for ordem, i in enumerate(json.loads(imp["indicadores"])):
+        execute_db("INSERT INTO metas_mensais(id, assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em, referencia) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (gen_id(), "celulares", i["chave"], i.get("rotulo") or i["chave"], i.get("tipo") or "n", i.get("direcao") or "min", ordem, ano, mes, i.get("valor"), i.get("meta"), imp["importado_por"], imp["importado_em"], imp["base"]))
 
 @app.route("/api/celulares/relatorio", methods=["GET"])
 @auth_required
 def get_celulares_relatorio():
     if not celulares_acesso(): return error("Acesso restrito a TI", 403)
-    r = query_db("SELECT base, arquivo, importado_por, importado_em, dispositivos FROM celulares_relatorio WHERE id=1", one=True)
+    r = query_db(f"SELECT id, base, arquivo, importado_por, importado_em, dispositivos, indicadores FROM celulares_importacoes {CEL_ORDEM_IMPORTACAO} LIMIT 1", one=True)
     if not r: return success(None)
+    r["dispositivos"] = json.loads(r["dispositivos"])
+    r["indicadores"] = json.loads(r["indicadores"]) if r["indicadores"] else None
+    return success(r)
+
+@app.route("/api/celulares/importacoes", methods=["GET"])
+@auth_required
+def list_celulares_importacoes():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    rows = query_db(f"SELECT id, base, arquivo, importado_por, importado_em, aparelhos, indicadores FROM celulares_importacoes {CEL_ORDEM_IMPORTACAO}")
+    for r in rows: r["indicadores"] = json.loads(r["indicadores"]) if r["indicadores"] else None
+    return success(rows)
+
+@app.route("/api/celulares/importacoes/<iid>", methods=["GET"])
+@auth_required
+def get_celulares_importacao(iid):
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    r = query_db("SELECT id, base, arquivo, importado_por, importado_em, dispositivos FROM celulares_importacoes WHERE id=?", [iid], one=True)
+    if not r: return error("Importacao nao encontrada", 404)
     r["dispositivos"] = json.loads(r["dispositivos"])
     return success(r)
 
-@app.route("/api/celulares/relatorio", methods=["PUT"])
+@app.route("/api/celulares/importacoes", methods=["POST"])
 @auth_required
-def put_celulares_relatorio():
+def create_celulares_importacao():
     if not celulares_acesso(): return error("Acesso restrito a TI", 403)
     d = request.json or {}
-    base = d.get("base"); disp = d.get("dispositivos")
-    if not base or not isinstance(disp, list) or not disp: return error("Relatorio invalido: informe a data-base e a lista de dispositivos")
-    # Relatorio unico (id=1): um CSV novo substitui o anterior
-    execute_db("INSERT OR REPLACE INTO celulares_relatorio(id, base, arquivo, importado_por, importado_em, dispositivos) VALUES(1,?,?,?,datetime('now'),?)",
-               (base, d.get("arquivo"), g.user["username"], json.dumps(disp, ensure_ascii=False)))
-    return success(message=f"Relatorio salvo: {len(disp)} aparelhos")
+    base = d.get("base"); disp = d.get("dispositivos"); itens = d.get("indicadores")
+    if not base or len(base) < 7 or not isinstance(disp, list) or not disp: return error("Relatorio invalido: informe a data-base e a lista de dispositivos")
+    msg = validar_indicadores(itens)
+    if msg: return error(msg)
+    iid = gen_id()
+    execute_db("INSERT INTO celulares_importacoes(id, base, arquivo, importado_por, importado_em, aparelhos, dispositivos, indicadores) VALUES(?,?,?,?,datetime('now'),?,?,?)",
+               (iid, base, d.get("arquivo"), g.user["username"], len(disp), json.dumps(disp, ensure_ascii=False), json.dumps(itens, ensure_ascii=False)))
+    atualizar_mes_celulares(base[:7])
+    return success({"id": iid}, f"Relatorio salvo: {len(disp)} aparelhos", 201)
+
+@app.route("/api/celulares/importacoes/<iid>/indicadores", methods=["PUT"])
+@auth_required
+def put_celulares_importacao_indicadores(iid):
+    # Usado para completar importacoes antigas (migradas sem indicadores calculados)
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    r = query_db("SELECT base FROM celulares_importacoes WHERE id=?", [iid], one=True)
+    if not r: return error("Importacao nao encontrada", 404)
+    itens = (request.json or {}).get("indicadores")
+    msg = validar_indicadores(itens)
+    if msg: return error(msg)
+    execute_db("UPDATE celulares_importacoes SET indicadores=? WHERE id=?", (json.dumps(itens, ensure_ascii=False), iid))
+    atualizar_mes_celulares(r["base"][:7])
+    return success(message="Indicadores salvos")
+
+@app.route("/api/celulares/importacoes/<iid>", methods=["DELETE"])
+@auth_required
+def delete_celulares_importacao(iid):
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    r = query_db("SELECT base FROM celulares_importacoes WHERE id=?", [iid], one=True)
+    if not r: return error("Importacao nao encontrada", 404)
+    execute_db("DELETE FROM celulares_importacoes WHERE id=?", [iid])
+    atualizar_mes_celulares(r["base"][:7])
+    return success(message="Importacao excluida")
 
 @app.route("/api/celulares/metas", methods=["GET"])
 @auth_required
@@ -986,18 +1064,27 @@ def put_celulares_metas():
         if meta is not None and not isinstance(meta, (int, float)): return error(f"Meta invalida para {chave}")
     for chave, meta in d.items():
         execute_db("INSERT OR REPLACE INTO celulares_metas(chave, meta, atualizado_em) VALUES(?,?,datetime('now'))", (chave, meta))
+    # A meta nova passa a valer no mes do relatorio atual (meses anteriores mantem a meta da epoca)
+    atual = query_db(f"SELECT id, base, indicadores FROM celulares_importacoes WHERE indicadores IS NOT NULL {CEL_ORDEM_IMPORTACAO} LIMIT 1", one=True)
+    if atual:
+        itens = json.loads(atual["indicadores"])
+        for i in itens:
+            if i["chave"] in d: i["meta"] = d[i["chave"]]
+        execute_db("UPDATE celulares_importacoes SET indicadores=? WHERE id=?", (json.dumps(itens, ensure_ascii=False), atual["id"]))
+        atualizar_mes_celulares(atual["base"][:7])
     return success(message="Metas salvas")
 
 # ─────────── PAINEL DE METAS ───────────
-# Valores mensais por assunto, gravados no "fechamento do mes". O acumulado do ano
+# Valores mensais por assunto. Celulares e preenchido automaticamente pelas importacoes;
+# a rota de fechamento fica para assuntos com lancamento manual. O acumulado do ano
 # (media dos meses) e o status de cada celula sao calculados no frontend.
-METAS_ASSUNTOS = {"celulares": CELULARES_METAS}
+METAS_ASSUNTOS = {}  # assunto -> indicadores aceitos no fechamento manual
 
 @app.route("/api/metas-painel", methods=["GET"])
 @auth_required
 def get_metas_painel():
     ano = request.args.get("ano", type=int) or datetime.now().year
-    itens = query_db("SELECT assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em FROM metas_mensais WHERE ano=? ORDER BY assunto, ordem, mes", [ano])
+    itens = query_db("SELECT assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em, referencia FROM metas_mensais WHERE ano=? ORDER BY assunto, ordem, mes", [ano])
     anos = [r["ano"] for r in query_db("SELECT DISTINCT ano FROM metas_mensais ORDER BY ano DESC")]
     return success({"ano": ano, "anos": anos, "itens": itens})
 

@@ -2950,8 +2950,164 @@ function CelSecao({ titulo, info, acoes, children }) {
   );
 }
 
+// Indicadores de todos os grupos com as metas vigentes, no formato salvo em cada importação (alimenta o Painel de Metas)
+const indicadoresDaImportacao = (relatorio, metas) => {
+  const k = calcularIndicadores(relatorio);
+  return CEL_INDICADORES.map(chave => {
+    const d = METAS_PADRAO[chave];
+    return { chave, rotulo: d.rotulo, tipo: d.tipo, direcao: d.direcao, valor: k[chave].valor, meta: chave in metas ? metas[chave] : d.meta };
+  });
+};
+const fmtVariacao = (tipo, d) => (d == null || isNaN(d) ? '—' : (d > 0 ? '+' : d < 0 ? '−' : '') + (tipo === 'pct'
+  ? (Math.abs(d) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' p.p.'
+  : Math.abs(d).toLocaleString('pt-BR', { maximumFractionDigits: 1 })));
+const CEL_MAX_COMPARAR = 6;
+
+function CelHistorico({ importacoes, metas, onExcluir }) {
+  const [selecionados, setSelecionados] = useState(() => importacoes.slice(0, 2).map(i => i.id));
+  const [grupo, setGrupo] = useState('');
+  const [cache, setCache] = useState({});
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    setSelecionados(s => s.filter(id => importacoes.some(i => i.id === id)));
+  }, [importacoes]);
+
+  useEffect(() => {
+    selecionados.filter(id => !cache[id]).forEach(id => {
+      api.getCelularesImportacao(id)
+        .then(r => setCache(c => ({ ...c, [id]: { base: r.base, dispositivos: r.dispositivos } })))
+        .catch(e => setErro(e.message));
+    });
+  }, [selecionados]);
+
+  // Importação que alimenta cada mês do Painel de Metas: a primeira de cada mês na lista (ordenada da mais recente)
+  const usadaNoPainel = {}, mesesVistos = new Set();
+  importacoes.forEach(i => { const m = i.base.slice(0, 7); if (i.indicadores && !mesesVistos.has(m)) { mesesVistos.add(m); usadaNoPainel[i.id] = m; } });
+
+  const alternar = id => setSelecionados(s => (s.includes(id) ? s.filter(x => x !== id) : s.length >= CEL_MAX_COMPARAR ? s : [...s, id]));
+  const sel = importacoes.filter(i => selecionados.includes(i.id)).sort((a, b) => a.base.localeCompare(b.base) || a.importado_em.localeCompare(b.importado_em));
+  const carregados = sel.every(i => cache[i.id]);
+  const colunas = carregados ? sel.map(i => {
+    const rel = cache[i.id];
+    return { imp: i, rel, k: calcularIndicadores(rel, grupo), ch: analisarChips(rel, grupo), lista: rel.dispositivos.filter(d => !grupo || d.grupo === grupo) };
+  }) : [];
+  const gruposDisp = [...new Set(colunas.flatMap(c => c.rel.dispositivos.map(d => d.grupo)))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  const linhas = [
+    { rotulo: 'Dispositivos no Pulsus', tipo: 'n', valor: c => c.k.total },
+    { rotulo: 'Aparelhos ativos', tipo: 'n', valor: c => c.k.ativos },
+    ...CEL_INDICADORES.map(chave => ({ rotulo: METAS_PADRAO[chave].rotulo, chave, tipo: METAS_PADRAO[chave].tipo, direcao: METAS_PADRAO[chave].direcao, valor: c => c.k[chave].valor })),
+    { rotulo: 'Aparelhos com número cadastrado', tipo: 'n', direcao: 'max', valor: c => c.ch.comNumero },
+    { rotulo: 'Aparelhos com chip', tipo: 'n', valor: c => c.ch.comChip },
+    { rotulo: 'Aparelhos com 2 chips', tipo: 'n', valor: c => c.ch.com2Chips },
+  ];
+
+  // Mudanças de aparelhos entre a primeira e a última importação selecionadas
+  let mudancas = null;
+  if (colunas.length >= 2) {
+    const ant = new Map(colunas[0].lista.map(d => [d.id, d])), nov = new Map(colunas[colunas.length - 1].lista.map(d => [d.id, d]));
+    mudancas = [
+      ['Entraram no Pulsus', [...nov.values()].filter(d => !ant.has(d.id)).map(d => [d, ''])],
+      ['Saíram do Pulsus', [...ant.values()].filter(d => !nov.has(d.id)).map(d => [d, ''])],
+      ['Trocaram de usuário', [...nov.values()].filter(d => ant.has(d.id) && ant.get(d.id).nome !== d.nome).map(d => [d, `${ant.get(d.id).nome || '(sem nome)'} → ${d.nome || '(sem nome)'}`])],
+      ['Trocaram de grupo', [...nov.values()].filter(d => ant.has(d.id) && ant.get(d.id).grupo !== d.grupo).map(d => [d, `${ant.get(d.id).grupo} → ${d.grupo}`])],
+      ['Mudaram de status', [...nov.values()].filter(d => ant.has(d.id) && ant.get(d.id).status !== d.status).map(d => [d, `${ant.get(d.id).status} → ${d.status}`])],
+    ];
+  }
+  const th = 'px-3 py-3 font-medium whitespace-nowrap';
+  const td = 'px-3 py-2.5';
+  const rotuloImp = i => fmtDateTime(i.base);
+
+  return (
+    <div className="space-y-8">
+      <CelSecao titulo="Importações" info={`${importacoes.length} ${importacoes.length === 1 ? 'relatório salvo' : 'relatórios salvos'} · marque até ${CEL_MAX_COMPARAR} para comparar · o Painel de Metas usa a última importação de cada mês`}>
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-slate-700 text-slate-400 text-left">
+              {['Comparar', 'Data-base do relatório', 'Arquivo', 'Importado por', 'Importado em', 'Aparelhos', 'Painel de Metas', ''].map((h, i) => <th key={i} className={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {importacoes.map((i, idx) => (
+                <tr key={i.id} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition text-slate-300">
+                  <td className={td}><input type="checkbox" checked={selecionados.includes(i.id)} disabled={!selecionados.includes(i.id) && selecionados.length >= CEL_MAX_COMPARAR} onChange={() => alternar(i.id)} className="w-4 h-4 accent-blue-600 cursor-pointer" aria-label={`Comparar relatório de ${rotuloImp(i)}`} /></td>
+                  <td className={`${td} text-white whitespace-nowrap`}>{rotuloImp(i)} {idx === 0 && <CelPill cls="bg-blue-500/20 text-blue-400">Atual</CelPill>}</td>
+                  <td className={`${td} text-xs`}>{i.arquivo || '—'}</td>
+                  <td className={td}>{i.importado_por || '—'}</td>
+                  <td className={`${td} whitespace-nowrap`}>{fmtDateTime(i.importado_em && i.importado_em.replace(' ', 'T') + 'Z')}</td>
+                  <td className={`${td} font-mono`}>{i.aparelhos}</td>
+                  <td className={td}>{usadaNoPainel[i.id] ? <CelPill cls={CEL_STATUS_COLOR.ok}>{usadaNoPainel[i.id].slice(5, 7)}/{usadaNoPainel[i.id].slice(0, 4)}</CelPill> : <span className="text-slate-500 text-xs">—</span>}</td>
+                  <td className={`${td} text-right`}><button onClick={() => onExcluir(i)} title="Excluir importação" className="text-slate-500 hover:text-red-400 transition"><Trash2 size={16} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CelSecao>
+
+      <CelSecao titulo="Comparativo" info={sel.length < 2 ? 'Marque duas ou mais importações acima para comparar.' : `${sel.length} importações, da mais antiga para a mais recente · variação = última − primeira · cores pelas metas atuais`}
+        acoes={gruposDisp.length > 0 && <div className="sm:w-64"><Select label="Grupo" options={gruposDisp} value={grupo} onChange={e => setGrupo(e.target.value)} /></div>}>
+        {erro && <ErrorMsg msg={erro} />}
+        {sel.length >= 1 && !carregados && !erro && <Loading />}
+        {colunas.length >= 1 && (
+          <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b border-slate-700 text-slate-400 text-left">
+                <th className={`${th} min-w-[220px]`}>Indicador</th>
+                {colunas.map(c => <th key={c.imp.id} className={`${th} text-center`}>{fmtDate(c.imp.base)}<div className="text-[11px] text-slate-500 font-normal">{c.imp.base.slice(11, 16)}</div></th>)}
+                {colunas.length >= 2 && <th className={`${th} text-center border-l border-slate-700`}>Variação</th>}
+              </tr></thead>
+              <tbody>
+                {linhas.map(l => {
+                  const vals = colunas.map(c => l.valor(c));
+                  const dif = vals.length >= 2 && vals[0] != null && vals[vals.length - 1] != null ? vals[vals.length - 1] - vals[0] : null;
+                  const corDif = !l.direcao || !dif ? 'text-slate-400' : (l.direcao === 'max' ? dif > 0 : dif < 0) ? 'text-emerald-400' : 'text-red-400';
+                  return (
+                    <tr key={l.rotulo} className="border-b border-slate-700/50 hover:bg-slate-700/20">
+                      <td className={`${td} text-white`}>{l.rotulo}</td>
+                      {vals.map((v, i) => (
+                        <td key={i} className="px-1 py-1.5 text-center">
+                          <div className={`rounded-md px-2 py-1.5 font-mono text-xs whitespace-nowrap ${l.chave ? PAINEL_CELULA[statusMeta(l.chave, v, metas)] : 'text-slate-300'}`}>{fmtValorMeta(l.tipo, v)}</div>
+                        </td>
+                      ))}
+                      {colunas.length >= 2 && <td className={`px-3 py-1.5 text-center font-mono text-xs font-semibold whitespace-nowrap border-l border-slate-700 ${corDif}`}>{fmtVariacao(l.tipo, dif)}</td>}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CelSecao>
+
+      {mudancas && (
+        <CelSecao titulo="Mudanças nos aparelhos" info={`De ${rotuloImp(colunas[0].imp)} para ${rotuloImp(colunas[colunas.length - 1].imp)}${grupo ? ' · ' + grupo : ''}`}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            {mudancas.map(([titulo, itens]) => (
+              <div key={titulo} className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50">
+                <span className="text-slate-400 text-sm font-medium">{titulo}</span>
+                <p className="text-2xl font-bold text-white mt-1">{itens.length}</p>
+                {itens.length > 0 && (
+                  <details className="mt-3 pt-3 border-t border-slate-700/50 text-xs">
+                    <summary className="cursor-pointer text-blue-400 hover:text-blue-300">Ver aparelhos</summary>
+                    <ul className="mt-2 space-y-1.5 max-h-60 overflow-auto">
+                      {itens.map(([d, det]) => <li key={d.id} className="text-slate-300"><span className="font-mono text-slate-500">#{d.id}</span> {d.nome || '(sem nome)'}<div className="text-slate-500">{det || d.grupo}</div></li>)}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
+        </CelSecao>
+      )}
+    </div>
+  );
+}
+
 function CelularesPage() {
   const [rel, setRel] = useState(null);
+  const [importacoes, setImportacoes] = useState([]);
+  const [aba, setAba] = useState('atual');
   const [metas, setMetas] = useState({});
   const [metasForm, setMetasForm] = useState(metasDoForm({}));
   const [loading, setLoading] = useState(true);
@@ -2965,9 +3121,22 @@ function CelularesPage() {
   const [busca, setBusca] = useState('');
   const listaRef = useRef(null);
 
+  const recarregar = async () => {
+    const [r, imps] = await Promise.all([api.getCelularesRelatorio(), api.listCelularesImportacoes()]);
+    setRel(r); setImportacoes(imps);
+    return r;
+  };
+
   useEffect(() => {
-    Promise.all([api.getCelularesRelatorio(), api.getCelularesMetas()])
-      .then(([r, m]) => { setRel(r); setMetas(m); setMetasForm(metasDoForm(m)); })
+    Promise.all([recarregar(), api.getCelularesMetas()])
+      .then(async ([r, m]) => {
+        setMetas(m); setMetasForm(metasDoForm(m));
+        // Relatório migrado da versão sem histórico: calcula e salva os indicadores dele uma vez
+        if (r && !r.indicadores) {
+          await api.saveCelularesIndicadores(r.id, indicadoresDaImportacao({ base: r.base, dispositivos: r.dispositivos }, m));
+          await recarregar();
+        }
+      })
       .catch(e => setLoadErr(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -2987,10 +3156,13 @@ function CelularesPage() {
     try {
       const lido = lerRelatorioPulsus(await lerArquivoCSV(file));
       if (!lido.dispositivos.length) throw new Error('Nenhum aparelho encontrado no arquivo.');
-      await api.saveCelularesRelatorio({ base: lido.base, arquivo: file.name, dispositivos: lido.dispositivos });
-      setRel(await api.getCelularesRelatorio());
+      await api.createCelularesImportacao({ base: lido.base, arquivo: file.name, dispositivos: lido.dispositivos, indicadores: indicadoresDaImportacao(lido, metas) });
+      const atual = await recarregar();
       setGrupo(''); setFiltro('todos'); setBusca('');
-      setMsg({ tipo: 'ok', texto: `Painel atualizado: ${lido.dispositivos.length} aparelhos, relatório de ${fmtDateTime(lido.base)}.` });
+      const mesRef = `${lido.base.slice(5, 7)}/${lido.base.slice(0, 4)}`;
+      setMsg({ tipo: 'ok', texto: atual && atual.base > lido.base
+        ? `Relatório de ${fmtDateTime(lido.base)} salvo no histórico (${lido.dispositivos.length} aparelhos). A página continua mostrando o mais recente, de ${fmtDateTime(atual.base)}.`
+        : `Painel atualizado: ${lido.dispositivos.length} aparelhos, relatório de ${fmtDateTime(lido.base)}. Painel de Metas de ${mesRef} atualizado.` });
     } catch (e) {
       setMsg({ tipo: 'err', texto: e.message || String(e) });
     } finally {
@@ -3003,27 +3175,19 @@ function CelularesPage() {
     if (Object.values(novas).some(v => v != null && isNaN(v))) { setMetasMsg('Use apenas números nas metas.'); return; }
     try {
       await api.saveCelularesMetas(novas);
-      setMetas(novas); setMetasMsg('Metas salvas.');
+      setMetas(novas); setMetasMsg('Metas salvas. Valem também para o mês do relatório atual no Painel de Metas.');
+      api.listCelularesImportacoes().then(setImportacoes).catch(() => {});
     } catch (e) { setMetasMsg('Não foi possível salvar: ' + e.message); }
   };
 
-  // Grava no Painel de Metas os 8 indicadores (todos os grupos) no mês da data-base do relatório
-  const fecharMes = async () => {
-    const [ano, mes] = rel.base.slice(0, 7).split('-').map(Number);
-    const rotuloMes = `${String(mes).padStart(2, '0')}/${ano}`;
+  const excluirImportacao = async (imp) => {
+    if (!window.confirm(`Excluir a importação do relatório de ${fmtDateTime(imp.base)} (${imp.arquivo || 'sem nome'})?\n\nSe ela alimentava o Painel de Metas, o mês passa a usar a importação anterior do mesmo mês.`)) return;
     try {
-      const painel = await api.getMetasPainel(ano);
-      const jaFechado = painel.itens.some(i => i.assunto === 'celulares' && i.mes === mes);
-      if (!window.confirm(`Gravar os indicadores de todos os grupos no Painel de Metas como ${rotuloMes}?${jaFechado ? '\n\nEste mês já foi fechado: o fechamento anterior será substituído.' : ''}`)) return;
-      const todos = calcularIndicadores(relatorio);
-      const itens = CEL_INDICADORES.map(chave => [chave, METAS_PADRAO[chave]]).map(([chave, d]) => ({
-        chave, rotulo: d.rotulo, tipo: d.tipo, direcao: d.direcao,
-        valor: todos[chave].valor, meta: chave in metas ? metas[chave] : d.meta,
-      }));
-      await api.fecharMesMetas({ assunto: 'celulares', ano, mes, itens });
-      setMsg({ tipo: 'ok', texto: `Mês ${rotuloMes} fechado no Painel de Metas.` });
+      await api.deleteCelularesImportacao(imp.id);
+      await recarregar();
+      setMsg({ tipo: 'ok', texto: `Importação de ${fmtDateTime(imp.base)} excluída.` });
     } catch (e) {
-      setMsg({ tipo: 'err', texto: 'Não foi possível fechar o mês: ' + e.message });
+      setMsg({ tipo: 'err', texto: 'Não foi possível excluir: ' + e.message });
     }
   };
 
@@ -3045,7 +3209,7 @@ function CelularesPage() {
       onDrop={e => { e.preventDefault(); setArrastando(false); importar(e.dataTransfer?.files?.[0]); }}
       className={`flex flex-col sm:flex-row sm:items-center gap-4 p-5 border-2 border-dashed rounded-xl transition ${arrastando ? 'border-blue-500 bg-blue-500/5' : 'border-slate-700'}`}>
       <div className="p-3 rounded-lg bg-blue-500/20 text-blue-400 self-start"><Upload size={20} /></div>
-      <p className="flex-1 text-sm text-slate-400"><span className="text-white font-medium">Atualizar com novo relatório:</span> arraste aqui o CSV exportado do Pulsus (devices_report) ou escolha o arquivo. A página passa a mostrar só o relatório mais recente.</p>
+      <p className="flex-1 text-sm text-slate-400"><span className="text-white font-medium">Atualizar com novo relatório:</span> arraste aqui o CSV exportado do Pulsus (devices_report) ou escolha o arquivo. Cada importação fica salva no histórico; a página mostra o relatório mais recente e o Painel de Metas usa o último de cada mês.</p>
       <label className={`flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition cursor-pointer ${importando ? 'opacity-50 pointer-events-none' : ''}`}>
         {importando ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />} {importando ? 'Importando...' : 'Escolher CSV'}
         <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { importar(e.target.files[0]); e.target.value = ''; }} />
@@ -3071,12 +3235,7 @@ function CelularesPage() {
         </p>
         {rel && <p className="text-slate-500 text-xs mt-1">{rel.arquivo || 'Arquivo sem nome'} · importado por {rel.importado_por || '—'} em {fmtDateTime(rel.importado_em && rel.importado_em.replace(' ', 'T') + 'Z')}</p>}
       </div>
-      {rel && (
-        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-          <button onClick={fecharMes} title="Grava os indicadores de todos os grupos no Painel de Metas" className="mb-3 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-700 hover:bg-slate-600 text-white transition"><CalendarDays size={16} /> Fechar mês {rel.base.slice(5, 7)}/{rel.base.slice(0, 4)}</button>
-          <div className="sm:w-64"><Select label="Grupo" options={grupos} value={grupo} onChange={e => { setGrupo(e.target.value); setFiltro('todos'); }} /></div>
-        </div>
-      )}
+      {rel && aba === 'atual' && <div className="sm:w-64"><Select label="Grupo" options={grupos} value={grupo} onChange={e => { setGrupo(e.target.value); setFiltro('todos'); }} /></div>}
     </div>
   );
 
@@ -3155,7 +3314,16 @@ function CelularesPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-4">{cabecalho}{zonaImportacao}{aviso}</div>
+      <div className="space-y-4">
+        {cabecalho}{zonaImportacao}{aviso}
+        <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg w-fit">
+          {[['atual', 'Relatório atual'], ['historico', `Histórico e comparativo (${importacoes.length})`]].map(([k, l]) => (
+            <button key={k} onClick={() => setAba(k)} className={`px-4 py-2 rounded-md text-sm font-medium transition ${aba === k ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {aba === 'historico' ? <CelHistorico importacoes={importacoes} metas={metas} onExcluir={excluirImportacao} /> : <>
 
       <CelSecao titulo="Indicadores do parque" info={`${k.ativos} aparelhos ativos${k.inativos ? ` · ${k.inativos} com wipe/inativos` : ''}${grupo ? ' · ' + grupo : ''}`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -3278,6 +3446,7 @@ function CelularesPage() {
       </div>
 
       {formMetas}
+      </>}
     </div>
   );
 }
@@ -3306,7 +3475,7 @@ function PainelMetasPage() {
   if (err) return <ErrorMsg msg={err} />;
 
   const anos = [...new Set([new Date().getFullYear(), ...data.anos])].sort((a, b) => b - a);
-  // assunto → indicador → { definição do último mês fechado, valores por mês }
+  // assunto → indicador → { definição do último mês com dados, valores por mês }
   const grupos = {};
   data.itens.filter(i => !PAINEL_ASSUNTOS[i.assunto]?.indicadores || PAINEL_ASSUNTOS[i.assunto].indicadores.includes(i.chave)).forEach(i => {
     const ind = ((grupos[i.assunto] = grupos[i.assunto] || {})[i.chave] = grupos[i.assunto][i.chave] || { meses: {} });
@@ -3320,7 +3489,7 @@ function PainelMetasPage() {
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white">Painel de Metas</h1>
-          <p className="text-slate-400 text-sm mt-1">Indicadores por assunto, mês a mês e acumulado do ano (média dos meses fechados)</p>
+          <p className="text-slate-400 text-sm mt-1">Indicadores por assunto, mês a mês e acumulado do ano (média dos meses com dados)</p>
         </div>
         <label className="block sm:w-40">
           <span className="text-sm text-slate-400 mb-1 block">Ano</span>
@@ -3332,12 +3501,12 @@ function PainelMetasPage() {
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         {['ok', 'warn', 'crit', 'na'].map(s => <CelPill key={s} cls={CEL_STATUS_COLOR[s]}>{ROTULO_STATUS[s]}</CelPill>)}
-        <span className="text-slate-500 ml-1">Cada mês mostra os valores gravados em “Fechar mês”, comparados com a meta vigente naquele mês.</span>
+        <span className="text-slate-500 ml-1">Cada mês usa a última importação do relatório daquele mês (pela data-base), comparada com a meta vigente naquele mês.</span>
       </div>
 
       {Object.keys(grupos).length === 0 ? (
         <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">
-          Nenhum mês fechado em {ano}. Na página Celulares, use “Fechar mês” para gravar os indicadores do relatório atual.
+          Nenhum dado em {ano}. Os meses são preenchidos automaticamente ao importar o relatório do Pulsus na página Celulares.
         </div>
       ) : Object.entries(grupos).map(([assunto, inds]) => {
         const cfg = PAINEL_ASSUNTOS[assunto] || { titulo: assunto, status: () => 'na' };
@@ -3345,7 +3514,7 @@ function PainelMetasPage() {
           <div key={assunto} className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between gap-2">
               <h2 className="text-white font-semibold">{cfg.titulo}</h2>
-              <span className="text-xs text-slate-500">{fechados} {fechados === 1 ? 'mês fechado' : 'meses fechados'} em {ano}</span>
+              <span className="text-xs text-slate-500">{fechados} {fechados === 1 ? 'mês com dados' : 'meses com dados'} em {ano}</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -3369,7 +3538,7 @@ function PainelMetasPage() {
                           const st = m ? cfg.status(ind.chave, m.valor, m.meta) : 'nodata';
                           return (
                             <td key={idx} className="px-1 py-1.5 text-center">
-                              <div title={m ? `${ROTULO_STATUS[st]} · meta ${fmtMetaPainel(m)} · fechado por ${m.fechado_por || '—'} em ${fmtDateTime(m.fechado_em && m.fechado_em.replace(' ', 'T') + 'Z')}` : 'Mês não fechado'}
+                              <div title={m ? `${ROTULO_STATUS[st]} · meta ${fmtMetaPainel(m)} · ${m.referencia ? 'relatório de ' + fmtDateTime(m.referencia) + ', ' : ''}importado por ${m.fechado_por || '—'} em ${fmtDateTime(m.fechado_em && m.fechado_em.replace(' ', 'T') + 'Z')}` : 'Sem dados neste mês'}
                                 className={`rounded-md px-2 py-1.5 font-mono text-xs whitespace-nowrap ${PAINEL_CELULA[st]}`}>{m ? fmtValorMeta(ind.tipo, m.valor) : '·'}</div>
                             </td>
                           );

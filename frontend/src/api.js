@@ -85,12 +85,15 @@ export const api={
   me: () => req('/auth/me'),
   // Celulares (painel Pulsus MDM)
   getCelularesRelatorio:()=>req('/celulares/relatorio'),
-  saveCelularesRelatorio:(d)=>req('/celulares/relatorio',{method:'PUT',body:d}),
+  listCelularesImportacoes:()=>req('/celulares/importacoes'),
+  getCelularesImportacao:(id)=>req('/celulares/importacoes/'+id),
+  createCelularesImportacao:(d)=>req('/celulares/importacoes',{method:'POST',body:d}),
+  saveCelularesIndicadores:(id,indicadores)=>req('/celulares/importacoes/'+id+'/indicadores',{method:'PUT',body:{indicadores}}),
+  deleteCelularesImportacao:(id)=>req('/celulares/importacoes/'+id,{method:'DELETE'}),
   getCelularesMetas:()=>req('/celulares/metas'),
   saveCelularesMetas:(d)=>req('/celulares/metas',{method:'PUT',body:d}),
   // Painel de Metas
   getMetasPainel:(ano)=>req('/metas-painel?ano='+(ano||new Date().getFullYear())),
-  fecharMesMetas:(d)=>req('/metas-painel/fechamento',{method:'POST',body:d}),
   // Telecom (Mobile Lines & Audits)
   listMobileLines:(p)=>req('/telecom/lines?'+new URLSearchParams(p)),
   getMobileLine:(id)=>req('/telecom/lines/'+id),
