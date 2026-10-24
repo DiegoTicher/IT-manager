@@ -3464,6 +3464,9 @@ const COMP_BLOCOS = [
 const COMP_CONTAS = ['contasSemUso', 'senhaNuncaExpira'];
 const COMP_FILTROS = [['todos', 'Todas'], ['comproblema', 'Com problema'], ['semAgente', 'Sem agente'], ['foraDominio', 'Fora do domínio'], ['inventario', 'Inventário atrasado'], ['fantasma', 'Fantasmas'], ['suporte', 'Sistema'], ['nome', 'Nome'], ['cadastro', 'Cadastro'], ['serial', 'Sem série'], ['duplicado', 'Duplicados'], ['agente', 'Agente'], ['hardware', 'Hardware']];
 const COMP_TIPOS = ['Notebook', 'Desktop', 'Servidor', 'VM'];
+// Quantidades do módulo Ativos (cadastro), por categoria do parque de computadores
+const COMP_CATEGORIAS = [['Computador', 'Desktops'], ['Notebook', 'Notebooks'], ['Servidor', 'Servidores'], ['Monitor', 'Monitores']];
+const COMP_STATUS_ATIVO = [['Ativo', 'Ativos'], ['Em Manutencao', 'Em manutenção'], ['Inativo', 'Inativos'], ['Desativado', 'Desativados']];
 const COMP_ARQUIVOS = [
   ['ocs', 'OCS (All computers)', 'Exportação "All computers" do OCS Inventory.', Comp.lerOCS],
   ['ad_computadores', 'AD computadores', 'ad_computadores.csv gerado pelo script exportar_ad.ps1.', Comp.lerADComputadores],
@@ -3477,6 +3480,7 @@ const fmtDataLocal = s => (s ? fmtDateTime(s.replace(' ', 'T') + 'Z') : '—');
 
 function ComputadoresPage() {
   const [arquivos, setArquivos] = useState({});
+  const [ativosCad, setAtivosCad] = useState([]);
   const [metas, setMetas] = useState({});
   const [metasForm, setMetasForm] = useState(compMetasDoForm({}));
   const [metasMsg, setMetasMsg] = useState('');
@@ -3491,8 +3495,8 @@ function ComputadoresPage() {
   const listaRef = useRef(null);
 
   useEffect(() => {
-    Promise.all([api.getComputadoresArquivos(), api.getComputadoresMetas()])
-      .then(([a, m]) => { setArquivos(a); setMetas(m); setMetasForm(compMetasDoForm(m)); })
+    Promise.all([api.getComputadoresArquivos(), api.getComputadoresMetas(), api.listAssets({})])
+      .then(([a, m, ativos]) => { setArquivos(a); setMetas(m); setMetasForm(compMetasDoForm(m)); setAtivosCad(ativos.filter(x => COMP_CATEGORIAS.some(([c]) => c === x.category))); })
       .catch(e => setLoadErr(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -3615,6 +3619,19 @@ function ComputadoresPage() {
     </div>
   );
 
+  const partesStatus = lista => COMP_STATUS_ATIVO.map(([s, l]) => [l, lista.filter(x => x.status === s).length]).filter(([, n]) => n > 0);
+  const equipamentos = (
+    <CelSecao titulo="Equipamentos cadastrados" info="Quantidades do módulo Ativos por categoria, com a situação de cada um">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+        {COMP_CATEGORIAS.map(([cat, rotulo]) => {
+          const lista = ativosCad.filter(x => x.category === cat);
+          return <CelCard key={cat} titulo={rotulo} valor={fmtNCel(lista.length)} linhas={[lista.length ? 'cadastrados em Ativos' : 'Nenhum cadastrado em Ativos']} partes={partesStatus(lista)} />;
+        })}
+        <CelCard titulo="Total do parque" valor={fmtNCel(ativosCad.length)} linhas={['desktops, notebooks, servidores e monitores']} partes={partesStatus(ativosCad)} />
+      </div>
+    </CelSecao>
+  );
+
   const avisosModulo = res && res.avisos.length > 0 && (
     <div className="px-4 py-3 rounded-lg text-sm bg-amber-500/10 text-amber-200 ring-1 ring-amber-500/30">
       <p className="font-medium flex items-center gap-2 mb-1"><AlertTriangle size={16} /> Avisos da exportação</p>
@@ -3643,7 +3660,7 @@ function ComputadoresPage() {
   if (!res) {
     return (
       <div className="space-y-6">
-        {cabecalho}{zonas}{aviso}
+        {cabecalho}{equipamentos}{zonas}{aviso}
         <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">Importe a exportação do OCS e o ad_computadores.csv para ver os indicadores. O arquivo de usuários do AD é opcional.</div>
         {formMetas}
       </div>
@@ -3669,7 +3686,9 @@ function ComputadoresPage() {
 
   return (
     <div className="space-y-8">
-      <div className="space-y-4">{cabecalho}{zonas}{aviso}{avisosModulo}</div>
+      {cabecalho}
+      {equipamentos}
+      <div className="space-y-4">{zonas}{aviso}{avisosModulo}</div>
 
       {COMP_BLOCOS.map(([bloco, chaves]) => (
         <CelSecao key={bloco} titulo={bloco} info={bloco === 'Contas do AD' ? (arquivos.ad_usuarios ? 'Contas habilitadas do AD (não muda com o filtro de tipo)' : 'Importe o ad_usuarios.csv para ver estes indicadores') : undefined}>
