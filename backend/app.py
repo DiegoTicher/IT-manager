@@ -97,6 +97,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_mm_ano ON metas_mensais(ano);
     CREATE TABLE IF NOT EXISTS celulares_importacoes (id TEXT PRIMARY KEY, base TEXT NOT NULL, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), aparelhos INTEGER DEFAULT 0, dispositivos TEXT NOT NULL, indicadores TEXT);
     CREATE INDEX IF NOT EXISTS idx_ci_base ON celulares_importacoes(base);
+    CREATE TABLE IF NOT EXISTS computadores_arquivos (tipo TEXT PRIMARY KEY CHECK(tipo IN ('ocs','ad_computadores','ad_usuarios')), base TEXT, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), dados TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS computadores_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
     """)
     # Migracao simples para bases existentes
     try:
@@ -963,23 +965,27 @@ CEL_ORDEM_IMPORTACAO = "ORDER BY base DESC, importado_em DESC"
 def celulares_acesso():
     return g.user["role"] == "admin"
 
-def validar_indicadores(itens):
+def validar_indicadores(itens, chaves=CELULARES_METAS):
     if not isinstance(itens, list) or not itens: return "Nenhum indicador informado"
     for i in itens:
-        if i.get("chave") not in CELULARES_METAS: return f"Indicador desconhecido: {i.get('chave')}"
+        if i.get("chave") not in chaves: return f"Indicador desconhecido: {i.get('chave')}"
         for campo in ("valor", "meta"):
             if i.get(campo) is not None and not isinstance(i.get(campo), (int, float)): return f"Valor invalido em {i.get('chave')}"
     return None
 
+def gravar_mes_painel(assunto, referencia, itens, por, em):
+    """Substitui no Painel de Metas o mes da data-base 'referencia' (AAAA-MM...) pelos indicadores informados."""
+    ano, mes = int(referencia[:4]), int(referencia[5:7])
+    execute_db("DELETE FROM metas_mensais WHERE assunto=? AND ano=? AND mes=?", (assunto, ano, mes))
+    for ordem, i in enumerate(itens or []):
+        execute_db("INSERT INTO metas_mensais(id, assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em, referencia) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (gen_id(), assunto, i["chave"], i.get("rotulo") or i["chave"], i.get("tipo") or "n", i.get("direcao") or "min", ordem, ano, mes, i.get("valor"), i.get("meta"), por, em, referencia))
+
 def atualizar_mes_celulares(mes_ref):
     """Recalcula o mes 'AAAA-MM' do Painel de Metas a partir da ultima importacao do mes."""
-    ano, mes = int(mes_ref[:4]), int(mes_ref[5:7])
     imp = query_db(f"SELECT id, base, importado_por, importado_em, indicadores FROM celulares_importacoes WHERE substr(base,1,7)=? AND indicadores IS NOT NULL {CEL_ORDEM_IMPORTACAO} LIMIT 1", [mes_ref], one=True)
-    execute_db("DELETE FROM metas_mensais WHERE assunto='celulares' AND ano=? AND mes=?", (ano, mes))
-    if not imp: return
-    for ordem, i in enumerate(json.loads(imp["indicadores"])):
-        execute_db("INSERT INTO metas_mensais(id, assunto, chave, rotulo, tipo, direcao, ordem, ano, mes, valor, meta, fechado_por, fechado_em, referencia) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                   (gen_id(), "celulares", i["chave"], i.get("rotulo") or i["chave"], i.get("tipo") or "n", i.get("direcao") or "min", ordem, ano, mes, i.get("valor"), i.get("meta"), imp["importado_por"], imp["importado_em"], imp["base"]))
+    if not imp: return gravar_mes_painel("celulares", mes_ref, [], None, None)
+    gravar_mes_painel("celulares", mes_ref, json.loads(imp["indicadores"]), imp["importado_por"], imp["importado_em"])
 
 @app.route("/api/celulares/relatorio", methods=["GET"])
 @auth_required
@@ -1073,6 +1079,75 @@ def put_celulares_metas():
         execute_db("UPDATE celulares_importacoes SET indicadores=? WHERE id=?", (json.dumps(itens, ensure_ascii=False), atual["id"]))
         atualizar_mes_celulares(atual["base"][:7])
     return success(message="Metas salvas")
+
+# ─────────── COMPUTADORES (OCS + ACTIVE DIRECTORY) ───────────
+# Os calculos ficam no frontend (src/lib/inventario-computadores.ts). Aqui guardamos o ultimo
+# arquivo de cada tipo, ja lido pelo modulo, e as metas. Cada importacao atualiza no Painel de
+# Metas o mes da data-base do OCS. Mostra usuarios e contas do AD: acesso restrito a TI (admin).
+COMPUTADORES_TIPOS = {"ocs": dict, "ad_computadores": list, "ad_usuarios": list}
+COMPUTADORES_METAS = ["cobertura", "foraDominio", "inventarioEmDia", "fantasmas", "cadastroCompleto", "nomePadrao", "serialValido",
+                      "duplicados", "estacoesSuportadas", "servidoresSuportados", "agenteAtualizado", "hardwareAbaixo", "contasSemUso", "senhaNuncaExpira"]
+
+@app.route("/api/computadores/arquivos", methods=["GET"])
+@auth_required
+def get_computadores_arquivos():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    rows = query_db("SELECT tipo, base, arquivo, importado_por, importado_em, dados FROM computadores_arquivos")
+    for r in rows: r["dados"] = json.loads(r["dados"])
+    return success({r["tipo"]: r for r in rows})
+
+@app.route("/api/computadores/arquivos/<tipo>", methods=["PUT"])
+@auth_required
+def put_computadores_arquivo(tipo):
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    if tipo not in COMPUTADORES_TIPOS: return error("Tipo de arquivo desconhecido")
+    d = request.json or {}
+    dados = d.get("dados")
+    if not isinstance(dados, COMPUTADORES_TIPOS[tipo]) or not dados: return error("Arquivo invalido ou vazio")
+    if tipo == "ocs" and (not d.get("base") or not dados.get("maquinas")): return error("Exportacao do OCS sem data-base ou sem maquinas")
+    # Um arquivo por tipo: a importacao nova substitui a anterior do mesmo tipo
+    execute_db("INSERT OR REPLACE INTO computadores_arquivos(tipo, base, arquivo, importado_por, importado_em, dados) VALUES(?,?,?,?,datetime('now'),?)",
+               (tipo, d.get("base"), d.get("arquivo"), g.user["username"], json.dumps(dados, ensure_ascii=False)))
+    return success(message="Arquivo salvo")
+
+@app.route("/api/computadores/arquivos/<tipo>", methods=["DELETE"])
+@auth_required
+def delete_computadores_arquivo(tipo):
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    if tipo != "ad_usuarios": return error("So o arquivo opcional de usuarios do AD pode ser removido")
+    execute_db("DELETE FROM computadores_arquivos WHERE tipo=?", [tipo])
+    return success(message="Arquivo removido")
+
+@app.route("/api/computadores/metas", methods=["GET"])
+@auth_required
+def get_computadores_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    return success({r["chave"]: r["meta"] for r in query_db("SELECT chave, meta FROM computadores_metas")})
+
+@app.route("/api/computadores/metas", methods=["PUT"])
+@auth_required
+def put_computadores_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    d = request.json or {}
+    for chave, meta in d.items():
+        if chave not in COMPUTADORES_METAS: return error(f"Meta desconhecida: {chave}")
+        if meta is not None and not isinstance(meta, (int, float)): return error(f"Meta invalida para {chave}")
+    for chave, meta in d.items():
+        execute_db("INSERT OR REPLACE INTO computadores_metas(chave, meta, atualizado_em) VALUES(?,?,datetime('now'))", (chave, meta))
+    return success(message="Metas salvas")
+
+@app.route("/api/computadores/mes", methods=["PUT"])
+@auth_required
+def put_computadores_mes():
+    # Chamado pela pagina depois de cada importacao ou mudanca de meta, com os indicadores ja calculados
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    d = request.json or {}
+    ref = d.get("referencia") or ""
+    if len(ref) < 7: return error("Data-base do OCS invalida")
+    msg = validar_indicadores(d.get("indicadores"), COMPUTADORES_METAS)
+    if msg: return error(msg)
+    gravar_mes_painel("computadores", ref, d["indicadores"], g.user["username"], datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    return success(message=f"Painel de Metas de {ref[5:7]}/{ref[:4]} atualizado")
 
 # ─────────── PAINEL DE METAS ───────────
 # Valores mensais por assunto. Celulares e preenchido automaticamente pelas importacoes;

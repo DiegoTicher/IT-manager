@@ -17,6 +17,7 @@ import {
   lerRelatorioPulsus, calcularIndicadores, statusMeta, analisarChips, analisarModelos, analisarVersoes,
   METAS_PADRAO, ROTULO_STATUS, nomeModelo, diasSemSync, quantidadeChips
 } from './lib/pulsus-indicadores';
+import * as Comp from './lib/inventario-computadores';
 
 /* ───────── helpers ───────── */
 const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -2912,12 +2913,12 @@ function CelPartes({ itens }) {
   );
 }
 
-function CelCard({ titulo, status, valor, linhas = [], partes, onVer }) {
+function CelCard({ titulo, status, valor, linhas = [], partes, onVer, rotulos = ROTULO_STATUS }) {
   return (
     <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50 hover:bg-slate-800/80 transition flex flex-col">
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-slate-400 text-sm font-medium">{titulo}</span>
-        {status && <CelPill cls={CEL_STATUS_COLOR[status]}>{ROTULO_STATUS[status]}</CelPill>}
+        {status && <CelPill cls={CEL_STATUS_COLOR[status]}>{rotulos[status]}</CelPill>}
       </div>
       <p className="text-2xl font-bold text-white">{valor}</p>
       {linhas.filter(Boolean).map((l, i) => <p key={i} className="text-xs text-slate-500 mt-1">{l}</p>)}
@@ -3451,10 +3452,295 @@ function CelularesPage() {
   );
 }
 
+/* ═══════════ COMPUTADORES (OCS + ACTIVE DIRECTORY) ═══════════ */
+// Todo cálculo vem de lib/inventario-computadores.ts (regras em INDICADORES.md do pacote de integração).
+const COMP_INDICADORES = Object.keys(Comp.METAS_PADRAO);
+const COMP_BLOCOS = [
+  ['Cobertura e presença', ['cobertura', 'foraDominio', 'inventarioEmDia', 'fantasmas']],
+  ['Cadastro e identificação', ['cadastroCompleto', 'nomePadrao', 'serialValido', 'duplicados']],
+  ['Ciclo de vida e segurança', ['estacoesSuportadas', 'servidoresSuportados', 'agenteAtualizado', 'hardwareAbaixo']],
+  ['Contas do AD', ['contasSemUso', 'senhaNuncaExpira']],
+];
+const COMP_CONTAS = ['contasSemUso', 'senhaNuncaExpira'];
+const COMP_FILTROS = [['todos', 'Todas'], ['comproblema', 'Com problema'], ['semAgente', 'Sem agente'], ['foraDominio', 'Fora do domínio'], ['inventario', 'Inventário atrasado'], ['fantasma', 'Fantasmas'], ['suporte', 'Sistema'], ['nome', 'Nome'], ['cadastro', 'Cadastro'], ['serial', 'Sem série'], ['duplicado', 'Duplicados'], ['agente', 'Agente'], ['hardware', 'Hardware']];
+const COMP_TIPOS = ['Notebook', 'Desktop', 'Servidor', 'VM'];
+const COMP_ARQUIVOS = [
+  ['ocs', 'OCS (All computers)', 'Exportação "All computers" do OCS Inventory.', Comp.lerOCS],
+  ['ad_computadores', 'AD computadores', 'ad_computadores.csv gerado pelo script exportar_ad.ps1.', Comp.lerADComputadores],
+  ['ad_usuarios', 'AD usuários (opcional)', 'ad_usuarios.csv do mesmo script; alimenta os indicadores de contas.', Comp.lerADUsuarios],
+];
+const COMP_SUPORTE = { suportado: ['Suportado', 'ok'], vence: ['Suporte vence', 'warn'], 'sem-suporte': ['Sem suporte', 'crit'], verificar: ['Verificar', 'na'] };
+const COMP_PROB_COLOR = { semAgente: 'bg-red-500/15 text-red-300', foraDominio: 'bg-rose-500/15 text-rose-300', inventario: 'bg-amber-500/15 text-amber-300', fantasma: 'bg-violet-500/15 text-violet-300', suporte: 'bg-red-500/15 text-red-300', nome: 'bg-slate-500/20 text-slate-300', cadastro: 'bg-amber-500/15 text-amber-300', serial: 'bg-cyan-500/15 text-cyan-300', duplicado: 'bg-rose-500/15 text-rose-300', agente: 'bg-sky-500/15 text-sky-300', hardware: 'bg-slate-500/20 text-slate-300' };
+const compMetasDoForm = m => Object.fromEntries(COMP_INDICADORES.map(k => [k, k in m ? (m[k] ?? '') : (Comp.METAS_PADRAO[k].meta ?? '')]));
+const compEntradas = arqs => (arqs.ocs && arqs.ad_computadores ? { ocs: arqs.ocs.dados, ad: arqs.ad_computadores.dados, usuarios: arqs.ad_usuarios?.dados } : null);
+const fmtDataLocal = s => (s ? fmtDateTime(s.replace(' ', 'T') + 'Z') : '—');
+
+function ComputadoresPage() {
+  const [arquivos, setArquivos] = useState({});
+  const [metas, setMetas] = useState({});
+  const [metasForm, setMetasForm] = useState(compMetasDoForm({}));
+  const [metasMsg, setMetasMsg] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
+  const [msg, setMsg] = useState(null);
+  const [importando, setImportando] = useState('');
+  const [arrastando, setArrastando] = useState('');
+  const [tipo, setTipo] = useState('');
+  const [filtro, setFiltro] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const listaRef = useRef(null);
+
+  useEffect(() => {
+    Promise.all([api.getComputadoresArquivos(), api.getComputadoresMetas()])
+      .then(([a, m]) => { setArquivos(a); setMetas(m); setMetasForm(compMetasDoForm(m)); })
+      .catch(e => setLoadErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const entradas = useMemo(() => compEntradas(arquivos), [arquivos]);
+  const res = useMemo(() => entradas && Comp.calcularIndicadores(entradas, { tipo }), [entradas, tipo]);
+
+  // Atualiza no Painel de Metas o mês da data-base do OCS (todos os tipos de máquina)
+  const atualizarPainel = async (arqs, metasAtuais) => {
+    const e = compEntradas(arqs);
+    if (!e) return '';
+    const todos = Comp.calcularIndicadores(e);
+    const indicadores = COMP_INDICADORES.map(chave => {
+      const d = Comp.METAS_PADRAO[chave];
+      return { chave, rotulo: d.rotulo, tipo: d.tipo, direcao: d.direcao, valor: todos.indicadores[chave].valor, meta: chave in metasAtuais ? metasAtuais[chave] : d.meta };
+    });
+    await api.saveComputadoresMes({ referencia: todos.base, indicadores });
+    return ` Painel de Metas de ${todos.base.slice(5, 7)}/${todos.base.slice(0, 4)} atualizado.`;
+  };
+
+  const importar = async (tipoArq, file) => {
+    if (!file) return;
+    const [, rotulo, , ler] = COMP_ARQUIVOS.find(a => a[0] === tipoArq);
+    setMsg(null); setImportando(tipoArq);
+    try {
+      const dados = ler(await lerArquivoCSV(file));
+      const qtd = tipoArq === 'ocs' ? dados.maquinas.length : dados.length;
+      if (!qtd) throw new Error('Nenhum registro encontrado no arquivo.');
+      await api.saveComputadoresArquivo(tipoArq, { base: tipoArq === 'ocs' ? dados.base : null, arquivo: file.name, dados });
+      const novos = await api.getComputadoresArquivos();
+      setArquivos(novos); setFiltro('todos'); setBusca('');
+      const painel = await atualizarPainel(novos, metas);
+      setMsg({ tipo: 'ok', texto: `${rotulo}: ${qtd} ${tipoArq === 'ad_usuarios' ? 'contas' : 'máquinas'} importadas${tipoArq === 'ocs' ? `, data-base ${fmtDateTime(dados.base)}` : ''}.${painel}` });
+    } catch (e) {
+      setMsg({ tipo: 'err', texto: `${rotulo}: ${e.message || String(e)}` });
+    } finally {
+      setImportando('');
+    }
+  };
+
+  const removerUsuarios = async () => {
+    if (!window.confirm('Remover o arquivo de usuários do AD? Os indicadores de contas ficam sem dados.')) return;
+    try {
+      await api.deleteComputadoresArquivo('ad_usuarios');
+      const novos = await api.getComputadoresArquivos();
+      setArquivos(novos);
+      setMsg({ tipo: 'ok', texto: 'Arquivo de usuários do AD removido.' + await atualizarPainel(novos, metas) });
+    } catch (e) { setMsg({ tipo: 'err', texto: e.message }); }
+  };
+
+  const salvarMetas = async () => {
+    const novas = Object.fromEntries(COMP_INDICADORES.map(k => { const v = metasForm[k]; return [k, v === '' || v == null ? null : Number(v)]; }));
+    if (Object.values(novas).some(v => v != null && isNaN(v))) { setMetasMsg('Use apenas números nas metas.'); return; }
+    try {
+      await api.saveComputadoresMetas(novas);
+      setMetas(novas);
+      setMetasMsg('Metas salvas.' + await atualizarPainel(arquivos, novas));
+    } catch (e) { setMetasMsg('Não foi possível salvar: ' + e.message); }
+  };
+
+  const verMaquinas = (f) => { setFiltro(f); setBusca(''); listaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const metaTxt = (chave) => {
+    const d = Comp.METAS_PADRAO[chave], m = chave in metas ? metas[chave] : d.meta;
+    if (m == null) return 'Informativo, sem meta';
+    return 'Meta ' + (d.direcao === 'max' ? '≥ ' : '≤ ') + m + (d.tipo === 'pct' ? '%' : '');
+  };
+
+  if (loading) return <Loading />;
+  if (loadErr) return <ErrorMsg msg={loadErr} />;
+
+  const ocs = arquivos.ocs;
+  const cabecalho = (
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-bold text-white">Computadores</h1>
+        <p className="text-slate-400 text-sm mt-1">
+          {res ? `Situação conforme o OCS de ${fmtDateTime(res.base)} e o AD · ${res.maquinas.length} máquinas${tipo ? ' · ' + tipo : ''}` : 'Importe a exportação do OCS e o ad_computadores.csv para ver os indicadores.'}
+        </p>
+      </div>
+      {res && <div className="sm:w-56"><Select label="Tipo" options={COMP_TIPOS} value={tipo} onChange={e => { setTipo(e.target.value); setFiltro('todos'); }} /></div>}
+    </div>
+  );
+
+  const zonas = (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {COMP_ARQUIVOS.map(([k, rotulo, desc]) => {
+        const a = arquivos[k];
+        return (
+          <div key={k}
+            onDragOver={e => { e.preventDefault(); setArrastando(k); }}
+            onDragLeave={() => setArrastando('')}
+            onDrop={e => { e.preventDefault(); setArrastando(''); importar(k, e.dataTransfer?.files?.[0]); }}
+            className={`flex flex-col gap-3 p-4 border-2 border-dashed rounded-xl transition ${arrastando === k ? 'border-blue-500 bg-blue-500/5' : 'border-slate-700'}`}>
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-blue-500/20 text-blue-400"><Upload size={18} /></div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white text-sm font-medium">{rotulo}</p>
+                <p className="text-xs text-slate-500">{desc} Arraste aqui ou escolha o arquivo.</p>
+              </div>
+            </div>
+            <p className={`text-xs ${a ? 'text-slate-400' : 'text-amber-400'}`}>
+              {a ? <>{a.arquivo || 'Arquivo sem nome'}{a.base ? ` · data-base ${fmtDateTime(a.base)}` : ''}<br />importado por {a.importado_por || '—'} em {fmtDataLocal(a.importado_em)}</> : k === 'ad_usuarios' ? 'Não importado (opcional).' : 'Não importado.'}
+            </p>
+            <div className="flex items-center gap-2 mt-auto">
+              <label className={`flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition cursor-pointer ${importando ? 'opacity-50 pointer-events-none' : ''}`}>
+                {importando === k ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />} {importando === k ? 'Importando...' : a ? 'Substituir CSV' : 'Escolher CSV'}
+                <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { importar(k, e.target.files[0]); e.target.value = ''; }} />
+              </label>
+              {k === 'ad_usuarios' && a && <button onClick={removerUsuarios} title="Remover arquivo de usuários" className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-700/50 transition"><Trash2 size={16} /></button>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const aviso = msg && (
+    <div className={`flex items-start gap-2 px-4 py-3 rounded-lg text-sm ${msg.tipo === 'ok' ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-red-500/10 text-red-300 ring-1 ring-red-500/30'}`}>
+      {msg.tipo === 'ok' ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" />}<span>{msg.texto}</span>
+    </div>
+  );
+
+  const avisosModulo = res && res.avisos.length > 0 && (
+    <div className="px-4 py-3 rounded-lg text-sm bg-amber-500/10 text-amber-200 ring-1 ring-amber-500/30">
+      <p className="font-medium flex items-center gap-2 mb-1"><AlertTriangle size={16} /> Avisos da exportação</p>
+      <ul className="list-disc pl-6 space-y-0.5 text-amber-200/90">{res.avisos.map((a, i) => <li key={i}>{a}</li>)}</ul>
+    </div>
+  );
+
+  const formMetas = (
+    <CelSecao titulo="Metas" info="Percentuais em %. Deixe em branco para o indicador ficar como informativo.">
+      <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4">
+          {COMP_INDICADORES.map(k => { const d = Comp.METAS_PADRAO[k]; return (
+            <Input key={k} type="number" step="any" label={`${d.rotulo} (${d.direcao === 'max' ? 'mínimo' : 'máximo'}${d.tipo === 'pct' ? ', %' : ''})`}
+              value={metasForm[k]} onChange={e => { setMetasForm({ ...metasForm, [k]: e.target.value }); setMetasMsg(''); }} />
+          ); })}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mt-2">
+          <button onClick={salvarMetas} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Salvar metas</button>
+          <button onClick={() => { setMetasForm(compMetasDoForm({})); setMetasMsg('Valores padrão carregados. Clique em Salvar para aplicar.'); }} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Restaurar padrão</button>
+          {metasMsg && <span className="text-xs text-slate-400">{metasMsg}</span>}
+        </div>
+      </div>
+    </CelSecao>
+  );
+
+  if (!res) {
+    return (
+      <div className="space-y-6">
+        {cabecalho}{zonas}{aviso}
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">Importe a exportação do OCS e o ad_computadores.csv para ver os indicadores. O arquivo de usuários do AD é opcional.</div>
+        {formMetas}
+      </div>
+    );
+  }
+
+  const ind = res.indicadores;
+  const temFiltro = (m, f) => {
+    if (f === 'todos') return true;
+    if (f === 'comproblema') return m.problemas.length > 0;
+    if (f.startsWith('ind:')) return ind[f.slice(4)].ids.includes(m.nome);
+    return m.problemas.some(p => p.tipo === f);
+  };
+  const contagem = Object.fromEntries(COMP_FILTROS.map(([f]) => [f, res.maquinas.filter(m => temFiltro(m, f)).length]));
+  const q = busca.trim().toLowerCase();
+  const maquinas = res.maquinas
+    .filter(m => temFiltro(m, filtro))
+    .filter(m => !q || [m.nome, m.tipo, m.usuario, m.so, m.serial, m.tag, m.ip, m.fabricante, m.modelo, m.ou].join(' ').toLowerCase().includes(q))
+    .sort((a, b) => b.problemas.length - a.problemas.length || a.nome.localeCompare(b.nome, 'pt-BR'));
+  const valorTxt = (chave) => { const v = ind[chave].valor; return Comp.METAS_PADRAO[chave].tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v); };
+  const th = 'px-3 py-3 font-medium whitespace-nowrap';
+  const td = 'px-3 py-2.5';
+
+  return (
+    <div className="space-y-8">
+      <div className="space-y-4">{cabecalho}{zonas}{aviso}{avisosModulo}</div>
+
+      {COMP_BLOCOS.map(([bloco, chaves]) => (
+        <CelSecao key={bloco} titulo={bloco} info={bloco === 'Contas do AD' ? (arquivos.ad_usuarios ? 'Contas habilitadas do AD (não muda com o filtro de tipo)' : 'Importe o ad_usuarios.csv para ver estes indicadores') : undefined}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {chaves.map(chave => {
+              const i = ind[chave], conta = COMP_CONTAS.includes(chave);
+              return (
+                <CelCard key={chave} titulo={Comp.METAS_PADRAO[chave].rotulo} status={Comp.statusMeta(chave, i.valor, metas)} valor={valorTxt(chave)} rotulos={Comp.ROTULO_STATUS}
+                  linhas={[metaTxt(chave), i.n != null && i.de != null ? `${i.n} de ${i.de}` : conta && i.de != null ? `de ${i.de} contas habilitadas` : '', i.nota]}
+                  partes={conta && i.ids.length ? i.ids.map(l => [l, '']) : undefined}
+                  onVer={!conta && i.ids.length ? () => verMaquinas('ind:' + chave) : undefined} />
+              );
+            })}
+          </div>
+        </CelSecao>
+      ))}
+
+      <div ref={listaRef} className="scroll-mt-4">
+        <CelSecao titulo="Máquinas" info={`${maquinas.length} de ${res.maquinas.length} máquinas`}
+          acoes={<div className="relative sm:w-80"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nome, usuário, sistema, série, IP" className="w-full bg-slate-900/60 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>}>
+          <div className="flex flex-wrap gap-2">
+            {filtro.startsWith('ind:') && (
+              <button onClick={() => setFiltro('todos')} className="px-3 py-1.5 rounded-full text-xs font-medium bg-blue-600 text-white flex items-center gap-1">
+                {Comp.METAS_PADRAO[filtro.slice(4)].rotulo} ({maquinas.length}) <X size={12} />
+              </button>
+            )}
+            {COMP_FILTROS.map(([f, l]) => (
+              <button key={f} onClick={() => setFiltro(f)} aria-pressed={filtro === f} className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filtro === f ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 ring-1 ring-slate-700 hover:text-white'}`}>{l} ({contagem[f]})</button>
+            ))}
+          </div>
+          <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-auto max-h-[620px]">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-slate-800"><tr className="border-b border-slate-700 text-slate-400 text-left">
+                {['Nome', 'Tipo', 'Fontes', 'Usuário', 'Sistema', 'Fabricante / modelo', 'Nº série', 'TAG', 'Últ. inventário OCS', 'Últ. logon AD', 'Problemas'].map(h => <th key={h} className={th}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {maquinas.map(m => {
+                  const [supTxt, supSt] = COMP_SUPORTE[m.suporte] || ['—', 'na'];
+                  return (
+                    <tr key={m.chave} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition text-slate-300 align-top">
+                      <td className={`${td} text-white font-medium whitespace-nowrap`}>{m.nome}</td>
+                      <td className={td}>{m.tipo}</td>
+                      <td className={td}><div className="flex gap-1">{m.noOCS && <CelPill cls="bg-blue-500/20 text-blue-400">OCS</CelPill>}{m.noAD && <CelPill cls="bg-violet-500/20 text-violet-400">AD</CelPill>}</div></td>
+                      <td className={`${td} whitespace-nowrap`}>{m.usuario || '—'}</td>
+                      <td className={td}><div className="min-w-[180px]">{m.so || '—'}{m.build ? <span className="text-slate-500 text-xs"> · build {m.build}</span> : null}</div><div className="mt-1"><CelPill cls={CEL_STATUS_COLOR[supSt]}>{supTxt}{m.fimSuporte ? ` · ${fmtDate(m.fimSuporte + 'T00:00')}` : ''}</CelPill></div></td>
+                      <td className={`${td} text-xs`}>{[m.fabricante, m.modelo].filter(Boolean).join(' · ') || '—'}</td>
+                      <td className={`${td} font-mono text-xs`}>{m.serial || '—'}</td>
+                      <td className={`${td} font-mono text-xs`}>{m.tag || '—'}</td>
+                      <td className={`${td} whitespace-nowrap text-xs`}>{m.ultimoContato || m.ultimoInventario ? fmtDateTime(m.ultimoContato || m.ultimoInventario) : '—'}</td>
+                      <td className={`${td} whitespace-nowrap text-xs`}>{m.ultimoLogonAD ? fmtDateTime(m.ultimoLogonAD) : '—'}</td>
+                      <td className={td}><div className="flex flex-wrap gap-1 min-w-[200px]">{m.problemas.length ? m.problemas.map((p, i) => <span key={i} className={`px-2 py-0.5 rounded text-xs ${COMP_PROB_COLOR[p.tipo] || 'bg-slate-500/20 text-slate-300'}`}>{p.texto}</span>) : <span className="text-slate-500">—</span>}</div></td>
+                    </tr>
+                  );
+                })}
+                {maquinas.length === 0 && <tr><td colSpan={11} className="px-4 py-12 text-center text-slate-500">Nenhuma máquina neste filtro.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </CelSecao>
+      </div>
+
+      {formMetas}
+    </div>
+  );
+}
+
 /* ═══════════ PAINEL DE METAS ═══════════ */
 // Cada assunto define seu título e como comparar valor × meta (Celulares usa statusMeta do módulo).
 const PAINEL_ASSUNTOS = {
   celulares: { titulo: 'Gestão de Celulares', indicadores: CEL_INDICADORES, status: (chave, valor, meta) => statusMeta(chave, valor, { [chave]: meta }) },
+  computadores: { titulo: 'Gestão de Computadores', indicadores: COMP_INDICADORES, rotulos: Comp.ROTULO_STATUS, status: (chave, valor, meta) => Comp.statusMeta(chave, valor, { [chave]: meta }) },
 };
 const PAINEL_CELULA = { ok: 'bg-emerald-500/15 text-emerald-300', warn: 'bg-amber-500/15 text-amber-300', crit: 'bg-red-500/15 text-red-300', na: 'text-slate-300', nodata: 'text-slate-600' };
 const fmtValorMeta = (tipo, v) => (v == null ? '—' : tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v));
@@ -3482,7 +3768,7 @@ function PainelMetasPage() {
     Object.assign(ind, { chave: i.chave, rotulo: i.rotulo, tipo: i.tipo, direcao: i.direcao, ordem: i.ordem, meta: i.meta });
     ind.meses[i.mes] = i;
   });
-  const fechados = [...new Set(data.itens.map(i => i.mes))].length;
+  const mesesComDados = assunto => new Set(data.itens.filter(i => i.assunto === assunto).map(i => i.mes)).size;
 
   return (
     <div className="space-y-6">
@@ -3506,7 +3792,7 @@ function PainelMetasPage() {
 
       {Object.keys(grupos).length === 0 ? (
         <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">
-          Nenhum dado em {ano}. Os meses são preenchidos automaticamente ao importar o relatório do Pulsus na página Celulares.
+          Nenhum dado em {ano}. Os meses são preenchidos automaticamente ao importar os relatórios nas páginas Celulares e Computadores.
         </div>
       ) : Object.entries(grupos).map(([assunto, inds]) => {
         const cfg = PAINEL_ASSUNTOS[assunto] || { titulo: assunto, status: () => 'na' };
@@ -3514,7 +3800,7 @@ function PainelMetasPage() {
           <div key={assunto} className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between gap-2">
               <h2 className="text-white font-semibold">{cfg.titulo}</h2>
-              <span className="text-xs text-slate-500">{fechados} {fechados === 1 ? 'mês com dados' : 'meses com dados'} em {ano}</span>
+              <span className="text-xs text-slate-500">{mesesComDados(assunto)} {mesesComDados(assunto) === 1 ? 'mês com dados' : 'meses com dados'} em {ano}</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -3538,13 +3824,13 @@ function PainelMetasPage() {
                           const st = m ? cfg.status(ind.chave, m.valor, m.meta) : 'nodata';
                           return (
                             <td key={idx} className="px-1 py-1.5 text-center">
-                              <div title={m ? `${ROTULO_STATUS[st]} · meta ${fmtMetaPainel(m)} · ${m.referencia ? 'relatório de ' + fmtDateTime(m.referencia) + ', ' : ''}importado por ${m.fechado_por || '—'} em ${fmtDateTime(m.fechado_em && m.fechado_em.replace(' ', 'T') + 'Z')}` : 'Sem dados neste mês'}
+                              <div title={m ? `${(cfg.rotulos || ROTULO_STATUS)[st]} · meta ${fmtMetaPainel(m)} · ${m.referencia ? 'relatório de ' + fmtDateTime(m.referencia) + ', ' : ''}importado por ${m.fechado_por || '—'} em ${fmtDateTime(m.fechado_em && m.fechado_em.replace(' ', 'T') + 'Z')}` : 'Sem dados neste mês'}
                                 className={`rounded-md px-2 py-1.5 font-mono text-xs whitespace-nowrap ${PAINEL_CELULA[st]}`}>{m ? fmtValorMeta(ind.tipo, m.valor) : '·'}</div>
                             </td>
                           );
                         })}
                         <td className="px-2 py-1.5 text-center border-l border-slate-700">
-                          <div title={ROTULO_STATUS[stAcum]} className={`rounded-md px-2 py-1.5 font-mono text-xs font-semibold whitespace-nowrap ${PAINEL_CELULA[stAcum]}`}>{fmtValorMeta(ind.tipo, media)}</div>
+                          <div title={(cfg.rotulos || ROTULO_STATUS)[stAcum]} className={`rounded-md px-2 py-1.5 font-mono text-xs font-semibold whitespace-nowrap ${PAINEL_CELULA[stAcum]}`}>{fmtValorMeta(ind.tipo, media)}</div>
                         </td>
                       </tr>
                     );
@@ -3566,6 +3852,7 @@ const NAV = [
   { key: 'assets', label: 'Ativos', icon: Monitor },
   { key: 'telecom', label: 'Linhas Móveis', icon: Smartphone },
   { key: 'celulares', label: 'Celulares', icon: TabletSmartphone },
+  { key: 'computadores', label: 'Computadores', icon: Laptop },
   { key: 'licenses', label: 'Licencas', icon: FileKey },
   { key: 'contracts', label: 'Contratos', icon: Briefcase },
   { key: 'budget', label: 'Orcamento', icon: DollarSign },
@@ -3575,7 +3862,7 @@ const NAV = [
   { key: 'users', label: 'Usuários', icon: Users },
 ];
 // Páginas restritas ao perfil admin (Celulares mostra nome, telefone e IMEI de funcionários)
-const NAV_ADMIN = ['users', 'celulares'];
+const NAV_ADMIN = ['users', 'celulares', 'computadores'];
 
 function Login({ onLogin }) {
   const [user, setUser] = useState('');
@@ -4201,6 +4488,7 @@ export default function App() {
       case 'assets': return <Assets user={user} />;
       case 'telecom': return <TelecomPage user={user} />;
       case 'celulares': return user && user.role === 'admin' ? <CelularesPage /> : <Dashboard />;
+      case 'computadores': return user && user.role === 'admin' ? <ComputadoresPage /> : <Dashboard />;
       case 'licenses': return <Licenses user={user} />;
       case 'contracts': return <ContractsPage />;
       case 'budget': return <Budget />;

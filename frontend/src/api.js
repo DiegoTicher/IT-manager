@@ -92,6 +92,13 @@ export const api={
   deleteCelularesImportacao:(id)=>req('/celulares/importacoes/'+id,{method:'DELETE'}),
   getCelularesMetas:()=>req('/celulares/metas'),
   saveCelularesMetas:(d)=>req('/celulares/metas',{method:'PUT',body:d}),
+  // Computadores (OCS + AD)
+  getComputadoresArquivos:()=>req('/computadores/arquivos'),
+  saveComputadoresArquivo:(tipo,d)=>req('/computadores/arquivos/'+tipo,{method:'PUT',body:d}),
+  deleteComputadoresArquivo:(tipo)=>req('/computadores/arquivos/'+tipo,{method:'DELETE'}),
+  getComputadoresMetas:()=>req('/computadores/metas'),
+  saveComputadoresMetas:(d)=>req('/computadores/metas',{method:'PUT',body:d}),
+  saveComputadoresMes:(d)=>req('/computadores/mes',{method:'PUT',body:d}),
   // Painel de Metas
   getMetasPainel:(ano)=>req('/metas-painel?ano='+(ano||new Date().getFullYear())),
   // Telecom (Mobile Lines & Audits)
