@@ -99,6 +99,7 @@ export const api={
   getComputadoresMetas:()=>req('/computadores/metas'),
   saveComputadoresMetas:(d)=>req('/computadores/metas',{method:'PUT',body:d}),
   saveComputadoresMes:(d)=>req('/computadores/mes',{method:'PUT',body:d}),
+  lerOcsDireto:()=>req('/computadores/ocs-direto'),
   // Painel de Metas
   getMetasPainel:(ano)=>req('/metas-painel?ano='+(ano||new Date().getFullYear())),
   // Telecom (Mobile Lines & Audits)

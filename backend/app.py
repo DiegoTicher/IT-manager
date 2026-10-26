@@ -1118,6 +1118,66 @@ def delete_computadores_arquivo(tipo):
     execute_db("DELETE FROM computadores_arquivos WHERE tipo=?", [tipo])
     return success(message="Arquivo removido")
 
+# Leitura direta do banco do OCS (MariaDB/MySQL) com um usuario so de leitura.
+# As credenciais ficam em backend/ocs_db.ini (fora do Git), secao [ocs]: host, port, database, user, password.
+# Os dados voltam no mesmo formato da exportacao "All computers" para a pagina passar pelo lerOCS do modulo.
+OCS_DB_INI = os.path.join(BASE_DIR, "ocs_db.ini")
+
+def conectar_ocs():
+    import configparser, pymysql
+    cfg = configparser.ConfigParser(interpolation=None)
+    if not cfg.read(OCS_DB_INI, encoding="utf-8") or "ocs" not in cfg:
+        raise LookupError("Integracao com o OCS nao configurada: crie o arquivo backend/ocs_db.ini no servidor do IT Manager.")
+    o = cfg["ocs"]
+    return pymysql.connect(host=o.get("host"), port=o.getint("port", 3306), database=o.get("database", "ocsweb"),
+                           user=o.get("user"), password=o.get("password", ""), charset="utf8mb4",
+                           connect_timeout=5, read_timeout=60)
+
+@app.route("/api/computadores/ocs-direto", methods=["GET"])
+@auth_required
+def get_computadores_ocs_direto():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    try:
+        db = conectar_ocs()
+    except LookupError as ex:
+        return error(str(ex))
+    except Exception as ex:
+        return error(f"Nao foi possivel conectar ao banco do OCS: {ex}", 502)
+    try:
+        with db.cursor() as cur:
+            # Campos administrativos de computadores: TAG fica em accountinfo.TAG, os demais em accountinfo.fields_<ID>
+            cur.execute("SELECT * FROM accountinfo_config")
+            nomes = [d[0].upper() for d in cur.description]
+            cfg_rows = [dict(zip(nomes, r)) for r in cur.fetchall()]
+            campos = [(c["ID"], str(c["NAME"]).upper()) for c in cfg_rows
+                      if c.get("NAME") and str(c["NAME"]).upper() != "TAG"
+                      and str(c.get("ACCOUNT_TYPE") or "COMPUTERS").upper() == "COMPUTERS"]
+            cur.execute("SHOW COLUMNS FROM accountinfo")
+            colunas_ai = {r[0].lower() for r in cur.fetchall()}
+            campos = [(i, n) for i, n in campos if f"fields_{i}" in colunas_ai]
+            extras = "".join(f", a.`fields_{i}`" for i, _ in campos)
+            cur.execute(f"""SELECT h.NAME, a.TAG, h.LASTDATE, h.LASTCOME, h.USERID, h.OSNAME, h.PROCESSORT,
+                                   b.SMANUFACTURER, b.SSN, b.SMODEL, h.IPADDR, h.MEMORY, h.USERAGENT{extras}
+                              FROM hardware h
+                              LEFT JOIN bios b ON b.HARDWARE_ID = h.ID
+                              LEFT JOIN accountinfo a ON a.HARDWARE_ID = h.ID
+                             WHERE h.DEVICEID NOT LIKE '\\_%' AND (h.ARCHIVE IS NULL OR h.ARCHIVE = 0)
+                             ORDER BY h.NAME""")
+            linhas = cur.fetchall()
+    except Exception as ex:
+        return error(f"Erro ao consultar o banco do OCS: {ex}", 502)
+    finally:
+        db.close()
+    # Cabecalhos iguais aos da exportacao "All computers" (o lerOCS do frontend reconhece por eles)
+    cab = ["Computer", "Account info : TAG", "Last inventory", "Last contact", "Connected user", "Operating system", "CPU type",
+           "Manufacturer", "Serial number", "Model", "IP address", "RAM (MB)", "Agent"] + [f"Account info : {n}" for _, n in campos]
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";", lineterminator="\n")
+    w.writerow(cab)
+    for r in linhas:
+        w.writerow(["" if v is None else (v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else str(v)) for v in r])
+    return success({"csv": out.getvalue(), "maquinas": len(linhas), "origem": "Banco do OCS"})
+
 @app.route("/api/computadores/metas", methods=["GET"])
 @auth_required
 def get_computadores_metas():

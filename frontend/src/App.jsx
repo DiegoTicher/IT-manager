@@ -3517,15 +3517,16 @@ function ComputadoresPage() {
     return ` Painel de Metas de ${todos.base.slice(5, 7)}/${todos.base.slice(0, 4)} atualizado.`;
   };
 
-  const importar = async (tipoArq, file) => {
-    if (!file) return;
+  // obter: devolve { texto, nome } do CSV (de um arquivo escolhido ou da leitura direta do banco do OCS)
+  const importarDe = async (tipoArq, obter) => {
     const [, rotulo, , ler] = COMP_ARQUIVOS.find(a => a[0] === tipoArq);
     setMsg(null); setImportando(tipoArq);
     try {
-      const dados = ler(await lerArquivoCSV(file));
+      const { texto, nome } = await obter();
+      const dados = ler(texto);
       const qtd = tipoArq === 'ocs' ? dados.maquinas.length : dados.length;
       if (!qtd) throw new Error('Nenhum registro encontrado no arquivo.');
-      await api.saveComputadoresArquivo(tipoArq, { base: tipoArq === 'ocs' ? dados.base : null, arquivo: file.name, dados });
+      await api.saveComputadoresArquivo(tipoArq, { base: tipoArq === 'ocs' ? dados.base : null, arquivo: nome, dados });
       const novos = await api.getComputadoresArquivos();
       setArquivos(novos); setFiltro('todos'); setBusca('');
       const painel = await atualizarPainel(novos, metas);
@@ -3536,6 +3537,11 @@ function ComputadoresPage() {
       setImportando('');
     }
   };
+  const importar = (tipoArq, file) => file && importarDe(tipoArq, async () => ({ texto: await lerArquivoCSV(file), nome: file.name }));
+  const atualizarDoOcs = () => importarDe('ocs', async () => {
+    const r = await api.lerOcsDireto();
+    return { texto: r.csv, nome: `${r.origem} (leitura direta)` };
+  });
 
   const removerUsuarios = async () => {
     if (!window.confirm('Remover o arquivo de usuários do AD? Os indicadores de contas ficam sem dados.')) return;
@@ -3605,6 +3611,7 @@ function ComputadoresPage() {
                 {importando === k ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />} {importando === k ? 'Importando...' : a ? 'Substituir CSV' : 'Escolher CSV'}
                 <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { importar(k, e.target.files[0]); e.target.value = ''; }} />
               </label>
+              {k === 'ocs' && <button onClick={atualizarDoOcs} disabled={!!importando} title="Lê as máquinas direto do banco do OCS, sem exportar CSV" className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-medium transition"><Server size={16} /> Atualizar do OCS</button>}
               {k === 'ad_usuarios' && a && <button onClick={removerUsuarios} title="Remover arquivo de usuários" className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-700/50 transition"><Trash2 size={16} /></button>}
             </div>
           </div>

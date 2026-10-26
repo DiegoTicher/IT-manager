@@ -6,3 +6,8 @@ frontend/dist/
 .env
 *.log
 .DS_Store
+backend/it_manager.db-shm
+backend/it_manager.db-wal
+backend/*.backup-*.db
+# Credenciais de acesso ao banco do OCS (criado manualmente em cada servidor)
+backend/ocs_db.ini
