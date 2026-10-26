@@ -1178,6 +1178,36 @@ def get_computadores_ocs_direto():
         w.writerow(["" if v is None else (v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else str(v)) for v in r])
     return success({"csv": out.getvalue(), "maquinas": len(linhas), "origem": "Banco do OCS"})
 
+# Leitura direta do Active Directory pelo script ad_consulta.ps1 (leitor embutido do Windows, sem senha).
+# No servico (LocalSystem) o AD e lido com a conta da maquina; os dados voltam no formato do exportar_ad.ps1.
+AD_SCRIPT = os.path.join(BASE_DIR, "ad_consulta.ps1")
+AD_CAB_COMPUTADORES = ["Name", "Enabled", "OperatingSystem", "OperatingSystemVersion", "UltimoLogon", "CriadoEm", "IPv4Address", "Description", "OU"]
+AD_CAB_USUARIOS = ["SamAccountName", "Name", "Enabled", "Department", "Title", "Description", "UltimoLogon", "SenhaAlteradaEm", "PasswordNeverExpires", "CriadoEm", "OU"]
+
+def csv_de(cabecalho, linhas):
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";", lineterminator="\n")
+    w.writerow(cabecalho)
+    for l in linhas: w.writerow(["" if l.get(c) is None else str(l.get(c)) for c in cabecalho])
+    return out.getvalue()
+
+@app.route("/api/computadores/ad-direto", methods=["GET"])
+@auth_required
+def get_computadores_ad_direto():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    import subprocess
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", AD_SCRIPT],
+                           capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return error("A leitura do Active Directory demorou demais (mais de 3 minutos).", 504)
+    if r.returncode != 0:
+        detalhe = r.stderr.decode("utf-8", errors="ignore").strip().splitlines()
+        return error("Nao foi possivel ler o Active Directory: " + (detalhe[0] if detalhe else f"codigo {r.returncode}"), 502)
+    d = json.loads(r.stdout.decode("utf-8-sig"))
+    return success({"computadores": csv_de(AD_CAB_COMPUTADORES, d["computadores"]), "usuarios": csv_de(AD_CAB_USUARIOS, d["usuarios"]),
+                    "qtdComputadores": len(d["computadores"]), "qtdUsuarios": len(d["usuarios"]), "identidade": d.get("identidade")})
+
 @app.route("/api/computadores/metas", methods=["GET"])
 @auth_required
 def get_computadores_metas():

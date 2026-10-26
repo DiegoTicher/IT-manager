@@ -2913,7 +2913,7 @@ function CelPartes({ itens }) {
   );
 }
 
-function CelCard({ titulo, status, valor, linhas = [], partes, onVer, rotulos = ROTULO_STATUS }) {
+function CelCard({ titulo, status, valor, linhas = [], partes, onVer, rotulos = ROTULO_STATUS, verRotulo = 'Ver aparelhos' }) {
   return (
     <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50 hover:bg-slate-800/80 transition flex flex-col">
       <div className="flex items-start justify-between gap-2 mb-2">
@@ -2924,7 +2924,7 @@ function CelCard({ titulo, status, valor, linhas = [], partes, onVer, rotulos = 
       {linhas.filter(Boolean).map((l, i) => <p key={i} className="text-xs text-slate-500 mt-1">{l}</p>)}
       {partes && partes.length > 0 && <CelPartes itens={partes} />}
       <div className="flex-1" />
-      {onVer && <button onClick={onVer} className="mt-3 self-end text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1">Ver aparelhos <ChevronRight size={14} /></button>}
+      {onVer && <button onClick={onVer} className="mt-3 self-end text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1">{verRotulo} <ChevronRight size={14} /></button>}
     </div>
   );
 }
@@ -3517,7 +3517,8 @@ function ComputadoresPage() {
     return ` Painel de Metas de ${todos.base.slice(5, 7)}/${todos.base.slice(0, 4)} atualizado.`;
   };
 
-  // obter: devolve { texto, nome } do CSV (de um arquivo escolhido ou da leitura direta do banco do OCS)
+  // obter: devolve { texto, nome } do CSV (de um arquivo escolhido ou da leitura direta do OCS/AD).
+  // Devolve a mensagem de sucesso, ou null se deu erro.
   const importarDe = async (tipoArq, obter) => {
     const [, rotulo, , ler] = COMP_ARQUIVOS.find(a => a[0] === tipoArq);
     setMsg(null); setImportando(tipoArq);
@@ -3530,9 +3531,12 @@ function ComputadoresPage() {
       const novos = await api.getComputadoresArquivos();
       setArquivos(novos); setFiltro('todos'); setBusca('');
       const painel = await atualizarPainel(novos, metas);
-      setMsg({ tipo: 'ok', texto: `${rotulo}: ${qtd} ${tipoArq === 'ad_usuarios' ? 'contas' : 'máquinas'} importadas${tipoArq === 'ocs' ? `, data-base ${fmtDateTime(dados.base)}` : ''}.${painel}` });
+      const resumo = `${rotulo}: ${qtd} ${tipoArq === 'ad_usuarios' ? 'contas' : 'máquinas'} importadas${tipoArq === 'ocs' ? `, data-base ${fmtDateTime(dados.base)}` : ''}.${painel}`;
+      setMsg({ tipo: 'ok', texto: resumo });
+      return resumo;
     } catch (e) {
       setMsg({ tipo: 'err', texto: `${rotulo}: ${e.message || String(e)}` });
+      return null;
     } finally {
       setImportando('');
     }
@@ -3542,6 +3546,18 @@ function ComputadoresPage() {
     const r = await api.lerOcsDireto();
     return { texto: r.csv, nome: `${r.origem} (leitura direta)` };
   });
+  // Uma leitura do AD alimenta os dois arquivos: computadores e usuários
+  const atualizarDoAd = async () => {
+    setMsg(null); setImportando('ad_computadores');
+    let r;
+    try { r = await api.lerAdDireto(); }
+    catch (e) { setMsg({ tipo: 'err', texto: 'Active Directory: ' + (e.message || String(e)) }); setImportando(''); return; }
+    const nome = `Active Directory (leitura direta como ${r.identidade})`;
+    const m1 = await importarDe('ad_computadores', async () => ({ texto: r.computadores, nome }));
+    if (!m1) return;
+    const m2 = await importarDe('ad_usuarios', async () => ({ texto: r.usuarios, nome }));
+    if (m2) setMsg({ tipo: 'ok', texto: `Active Directory lido como ${r.identidade}. ${m1} ${m2}` });
+  };
 
   const removerUsuarios = async () => {
     if (!window.confirm('Remover o arquivo de usuários do AD? Os indicadores de contas ficam sem dados.')) return;
@@ -3612,6 +3628,7 @@ function ComputadoresPage() {
                 <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { importar(k, e.target.files[0]); e.target.value = ''; }} />
               </label>
               {k === 'ocs' && <button onClick={atualizarDoOcs} disabled={!!importando} title="Lê as máquinas direto do banco do OCS, sem exportar CSV" className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-medium transition"><Server size={16} /> Atualizar do OCS</button>}
+              {k === 'ad_computadores' && <button onClick={atualizarDoAd} disabled={!!importando} title="Lê computadores e usuários direto do Active Directory, sem rodar o exportar_ad.ps1" className="flex-1 flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-medium transition"><Users size={16} /> Atualizar do AD</button>}
               {k === 'ad_usuarios' && a && <button onClick={removerUsuarios} title="Remover arquivo de usuários" className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-700/50 transition"><Trash2 size={16} /></button>}
             </div>
           </div>
@@ -3703,7 +3720,7 @@ function ComputadoresPage() {
             {chaves.map(chave => {
               const i = ind[chave], conta = COMP_CONTAS.includes(chave);
               return (
-                <CelCard key={chave} titulo={Comp.METAS_PADRAO[chave].rotulo} status={Comp.statusMeta(chave, i.valor, metas)} valor={valorTxt(chave)} rotulos={Comp.ROTULO_STATUS}
+                <CelCard key={chave} titulo={Comp.METAS_PADRAO[chave].rotulo} status={Comp.statusMeta(chave, i.valor, metas)} valor={valorTxt(chave)} rotulos={Comp.ROTULO_STATUS} verRotulo="Ver máquinas"
                   linhas={[metaTxt(chave), i.n != null && i.de != null ? `${i.n} de ${i.de}` : conta && i.de != null ? `de ${i.de} contas habilitadas` : '', i.nota]}
                   partes={conta && i.ids.length ? i.ids.map(l => [l, '']) : undefined}
                   onVer={!conta && i.ids.length ? () => verMaquinas('ind:' + chave) : undefined} />
