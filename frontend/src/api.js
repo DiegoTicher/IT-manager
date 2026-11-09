@@ -101,6 +101,24 @@ export const api={
   saveComputadoresMes:(d)=>req('/computadores/mes',{method:'PUT',body:d}),
   lerOcsDireto:()=>req('/computadores/ocs-direto'),
   lerAdDireto:()=>req('/computadores/ad-direto'),
+  // Chamados de TI (Relatorio_Chamados.xlsx)
+  listChamados:()=>req('/chamados'),
+  getChamado:(id)=>req('/chamados/'+encodeURIComponent(id)),
+  listChamadosImportacoes:()=>req('/chamados/importacoes'),
+  getChamadosMetas:()=>req('/chamados/metas'),
+  saveChamadosMetas:(d)=>req('/chamados/metas',{method:'PUT',body:d}),
+  saveChamadosMeses:(meses)=>req('/chamados/meses',{method:'PUT',body:{meses}}),
+  importarChamados: async (file) => {
+    const token = localStorage.getItem('it_manager_token');
+    const headers = {};
+    if (token) headers['Authorization'] = token;
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch('/api/chamados/importar', { method: 'POST', headers, body: formData });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message);
+    return data;
+  },
   // Painel de Metas
   getMetasPainel:(ano)=>req('/metas-painel?ano='+(ano||new Date().getFullYear())),
   // Telecom (Mobile Lines & Audits)

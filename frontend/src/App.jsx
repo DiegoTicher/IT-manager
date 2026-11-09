@@ -6,11 +6,11 @@ import {
   TrendingUp, Package, Shield, RefreshCw, Building2, Users, ArrowLeft,
   MessageSquare, Wrench, Send, Eye, ClipboardCheck, CalendarDays,
   MapPin, UserCheck, ChevronRight, CircleDot, Edit3, XCircle, CheckCircle2,
-  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen, TabletSmartphone, Target
+  Camera, Image as ImageIcon, Upload, Download, FileText, Briefcase, BookOpen, TabletSmartphone, Target, LifeBuoy
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart as RePieChart, Pie, Cell, Legend
+  PieChart as RePieChart, Pie, Cell, Legend, ComposedChart, Line
 } from 'recharts';
 import api from './api';
 import {
@@ -18,6 +18,7 @@ import {
   METAS_PADRAO, ROTULO_STATUS, nomeModelo, diasSemSync, quantidadeChips
 } from './lib/pulsus-indicadores';
 import * as Comp from './lib/inventario-computadores';
+import * as Ch from './lib/chamados-indicadores';
 
 /* ───────── helpers ───────── */
 const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -3779,11 +3780,432 @@ function ComputadoresPage() {
   );
 }
 
+/* ═══════════ CHAMADOS DE TI ═══════════ */
+// Todo cálculo vem de lib/chamados-indicadores.ts. O backend só lê o .xlsx e guarda os chamados (por ID).
+const CH_FILTROS = [['todos', 'Todos'], ['aberto', 'Em aberto'], ['atrasado', 'Abertos com prazo vencido'], ['foraPrazo', 'Fora do prazo'], ['semResp', 'Sem responsável'], ['notaBaixa', 'Nota 1 a 3'], ['semAval', 'Sem avaliação']];
+const CH_TEM_FILTRO = {
+  todos: () => true, aberto: Ch.emAberto, atrasado: c => Ch.atrasado(c), foraPrazo: Ch.foraDoPrazo, semResp: c => !c.responsavel,
+  notaBaixa: c => c.avaliacao != null && c.avaliacao <= 3, semAval: c => !Ch.emAberto(c) && c.avaliacao == null,
+};
+const CH_DIAS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const CH_TOOLTIP = { contentStyle: { background: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }, itemStyle: { color: '#e2e8f0' }, labelStyle: { color: '#e2e8f0' } };
+const fmtHoras = h => (h == null || isNaN(h) ? '—' : h < 48 ? `${fmtNCel(h)} h` : `${(h / 24).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} dias`);
+const fmtValorCh = (chave, v) => (Ch.METAS_PADRAO[chave].unidade === 'h' ? fmtHoras(v) : Ch.METAS_PADRAO[chave].tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v));
+const chMetasDoForm = m => Object.fromEntries(Ch.CHAVES.map(k => [k, k in m ? (m[k] ?? '') : (Ch.METAS_PADRAO[k].meta ?? '')]));
+const fmtLocal = s => (s ? fmtDateTime(s.replace(' ', 'T')) : '—');
+const fmtDiaLocal = s => (s ? fmtDate(s.slice(0, 10) + 'T00:00') : '—');
+const nomeCurto = n => (n || '').split(' ').slice(0, 2).map(p => p.charAt(0) + p.slice(1).toLowerCase()).join(' ');
+
+function ChSelect({ label, value, onChange, options }) {
+  return (
+    <label className="block">
+      <span className="text-xs text-slate-400 mb-1 block">{label}</span>
+      <select value={value} onChange={e => onChange(e.target.value)} className="w-full bg-slate-900/60 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function ChDetalhe({ id, onClose }) {
+  const [c, setC] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => { setC(null); setErr(''); if (id) api.getChamado(id).then(setC).catch(e => setErr(e.message)); }, [id]);
+  const campos = c ? [
+    ['Solicitante', c.colaborador], ['Revenda', c.revenda], ['Categoria', [c.categoria, c.detalhe].filter(Boolean).join(' · ')], ['Responsável', c.responsavel || '—'],
+    ['Status', c.status], ['Aberto em', fmtLocal(c.aberto_em)], ['Primeira resposta', c.primeira_resposta_em ? `${fmtLocal(c.primeira_resposta_em)} (${fmtHoras(Ch.horasPrimeiraResposta(c))})` : '—'],
+    ['Encerrado em', c.encerrado_em ? `${fmtLocal(c.encerrado_em)} (${fmtHoras(Ch.horasResolucao(c))})` : '—'], ['Prazo', fmtLocal(c.prazo_em)], ['SLA', c.sla || '—'], ['Avaliação', c.avaliacao ?? '—'],
+  ] : [];
+  return (
+    <Modal open={!!id} onClose={onClose} title={c ? `Chamado ${c.id} · ${c.assunto}` : `Chamado ${id}`} wide>
+      {err ? <ErrorMsg msg={err} /> : !c ? <Loading /> : (
+        <div className="space-y-5 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+            {campos.map(([l, v]) => <div key={l}><span className="text-slate-500 text-xs block">{l}</span><span className="text-white">{v}</span></div>)}
+          </div>
+          {c.descricao && <div><p className="text-slate-500 text-xs mb-1">Descrição</p><p className="text-slate-200 whitespace-pre-wrap bg-slate-900/50 rounded-lg p-3">{c.descricao}</p></div>}
+          <div>
+            <p className="text-slate-500 text-xs mb-2">Trâmites ({c.tramites.length}) · senhas, logins e CPFs mascarados na importação</p>
+            <ol className="space-y-2">
+              {c.tramites.map((t, i) => (
+                <li key={i} className="bg-slate-900/50 rounded-lg p-3">
+                  <p className="text-xs text-slate-400"><span className="text-slate-200 font-medium">{t.autor}</span> · {fmtLocal(t.em)}</p>
+                  <p className="text-slate-300 whitespace-pre-wrap mt-1">{t.texto}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function ChamadosPage() {
+  const [chamados, setChamados] = useState([]);
+  const [importacoes, setImportacoes] = useState([]);
+  const [metas, setMetas] = useState({});
+  const [metasForm, setMetasForm] = useState(chMetasDoForm({}));
+  const [metasMsg, setMetasMsg] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
+  const [msg, setMsg] = useState(null);
+  const [importando, setImportando] = useState(false);
+  const [arrastando, setArrastando] = useState(false);
+  const [verHistorico, setVerHistorico] = useState(false);
+  const [filtro, setFiltro] = useState({ ano: '', mes: '', revenda: '', categoria: '', responsavel: '' });
+  const [filtroLista, setFiltroLista] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const [aberto, setAberto] = useState(null);
+  const listaRef = useRef(null);
+
+  useEffect(() => {
+    Promise.all([api.listChamados(), api.listChamadosImportacoes(), api.getChamadosMetas()])
+      .then(([c, imp, m]) => {
+        setChamados(c); setImportacoes(imp); setMetas(m); setMetasForm(chMetasDoForm(m));
+        if (c.length) setFiltro(f => ({ ...f, ano: c[0].aberto_em.slice(0, 4) }));  // ano do chamado mais recente
+      })
+      .catch(e => setLoadErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const res = useMemo(() => Ch.calcular(chamados, filtro), [chamados, filtro]);
+  const opcoes = useMemo(() => {
+    const uniq = f => [...new Set(chamados.map(f).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    return {
+      anos: uniq(c => c.aberto_em.slice(0, 4)).reverse(), revendas: uniq(c => c.revenda), categorias: uniq(c => c.categoria),
+      responsaveis: [...uniq(c => c.responsavel), ...(chamados.some(c => !c.responsavel) ? [Ch.SEM_RESPONSAVEL] : [])],
+    };
+  }, [chamados]);
+
+  const atualizarPainel = async (lista, metasAtuais) => {
+    if (!lista.length) return '';
+    const meses = Ch.mesesParaPainel(lista, metasAtuais);
+    await api.saveChamadosMeses(meses);
+    return ` Painel de Metas atualizado (${meses.length} ${meses.length === 1 ? 'mês' : 'meses'}).`;
+  };
+
+  const importar = async (file) => {
+    if (!file) return;
+    if (!/\.xlsx$/i.test(file.name)) { setMsg({ tipo: 'err', texto: 'Envie o arquivo .xlsx exportado do sistema de chamados (Relatorio_Chamados.xlsx).' }); return; }
+    setMsg(null); setImportando(true);
+    try {
+      const r = await api.importarChamados(file);
+      const [lista, imp] = await Promise.all([api.listChamados(), api.listChamadosImportacoes()]);
+      setChamados(lista); setImportacoes(imp); setFiltroLista('todos'); setBusca('');
+      const painel = await atualizarPainel(lista, metas);
+      const d = r.data;
+      setMsg({ tipo: 'ok', texto: `${r.message}, abertos de ${fmtDiaLocal(d.inicio)} a ${fmtDiaLocal(d.fim)}.${painel}${d.avisos.length ? ' Avisos: ' + d.avisos.join('; ') + '.' : ''}` });
+    } catch (e) {
+      setMsg({ tipo: 'err', texto: e.message || String(e) });
+    } finally { setImportando(false); }
+  };
+
+  const salvarMetas = async () => {
+    const novas = Object.fromEntries(Ch.CHAVES.map(k => { const v = metasForm[k]; return [k, v === '' || v == null ? null : Number(v)]; }));
+    if (Object.values(novas).some(v => v != null && isNaN(v))) { setMetasMsg('Use apenas números nas metas.'); return; }
+    try {
+      await api.saveChamadosMetas(novas);
+      setMetas(novas);
+      setMetasMsg('Metas salvas.' + await atualizarPainel(chamados, novas));
+    } catch (e) { setMetasMsg('Não foi possível salvar: ' + e.message); }
+  };
+
+  const verLista = (f) => { setFiltroLista(f); setBusca(''); listaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const filtrarPor = (campo, valor) => setFiltro(f => ({ ...f, [campo]: f[campo] === valor ? '' : valor }));
+  const metaTxt = (chave) => {
+    const d = Ch.METAS_PADRAO[chave], m = chave in metas ? metas[chave] : d.meta;
+    if (m == null) return 'Informativo, sem meta';
+    return 'Meta ' + (d.direcao === 'max' ? '≥ ' : '≤ ') + m + (d.tipo === 'pct' ? '%' : d.unidade ? ' ' + d.unidade : '');
+  };
+
+  if (loading) return <Loading />;
+  if (loadErr) return <ErrorMsg msg={loadErr} />;
+
+  const ultima = importacoes[0];
+  const periodoTxt = [filtro.mes ? MONTHS[filtro.mes - 1] : '', filtro.ano || 'todo o período'].filter(Boolean).join('/');
+  const cabecalho = (
+    <div>
+      <h1 className="text-2xl font-bold text-white">Chamados de TI</h1>
+      <p className="text-slate-400 text-sm mt-1">
+        {chamados.length ? `${res.total} chamados abertos em ${periodoTxt}${[filtro.revenda, filtro.categoria, filtro.responsavel].filter(Boolean).map(x => ' · ' + x).join('')}` : 'Importe o Relatorio_Chamados.xlsx para ver os indicadores.'}
+      </p>
+    </div>
+  );
+
+  const zona = (
+    <div onDragOver={e => { e.preventDefault(); setArrastando(true); }} onDragLeave={() => setArrastando(false)}
+      onDrop={e => { e.preventDefault(); setArrastando(false); importar(e.dataTransfer?.files?.[0]); }}
+      className={`flex flex-col lg:flex-row lg:items-center gap-4 p-4 border-2 border-dashed rounded-xl transition ${arrastando ? 'border-blue-500 bg-blue-500/5' : 'border-slate-700'}`}>
+      <div className="flex items-start gap-3 flex-1 min-w-0">
+        <div className="p-2 rounded-lg bg-blue-500/20 text-blue-400"><Upload size={18} /></div>
+        <div className="min-w-0">
+          <p className="text-white text-sm font-medium">Relatório de chamados (.xlsx)</p>
+          <p className="text-xs text-slate-500">Exportação "Relatório Chamados" do sistema de chamados. Chamados já importados são atualizados pelo ID, então pode importar períodos que se sobrepõem. Arraste aqui ou escolha o arquivo.</p>
+          <p className={`text-xs mt-1 ${ultima ? 'text-slate-400' : 'text-amber-400'}`}>
+            {ultima ? <>Última: {ultima.arquivo} · {ultima.total} chamados ({ultima.novos} novos) · importado por {ultima.importado_por} em {fmtDataLocal(ultima.importado_em)}{' · '}
+              <button onClick={() => setVerHistorico(v => !v)} className="text-blue-400 hover:text-blue-300">{verHistorico ? 'ocultar histórico' : `histórico (${importacoes.length})`}</button></> : 'Nenhuma importação ainda.'}
+          </p>
+        </div>
+      </div>
+      <label className={`flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition cursor-pointer lg:w-52 ${importando ? 'opacity-50 pointer-events-none' : ''}`}>
+        {importando ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />} {importando ? 'Importando...' : 'Escolher .xlsx'}
+        <input type="file" accept=".xlsx" className="hidden" onChange={e => { importar(e.target.files[0]); e.target.value = ''; }} />
+      </label>
+    </div>
+  );
+
+  const historico = verHistorico && importacoes.length > 0 && (
+    <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead><tr className="border-b border-slate-700 text-slate-400 text-left">{['Importado em', 'Por', 'Arquivo', 'Chamados', 'Novos', 'Atualizados', 'Abertos de', 'até'].map(h => <th key={h} className="px-3 py-2 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+        <tbody>{importacoes.map(i => (
+          <tr key={i.id} className="border-b border-slate-700/50 text-slate-300">
+            <td className="px-3 py-2 whitespace-nowrap">{fmtDataLocal(i.importado_em)}</td><td className="px-3 py-2">{i.importado_por}</td><td className="px-3 py-2">{i.arquivo}</td>
+            <td className="px-3 py-2 font-mono">{i.total}</td><td className="px-3 py-2 font-mono">{i.novos}</td><td className="px-3 py-2 font-mono">{i.atualizados}</td>
+            <td className="px-3 py-2 whitespace-nowrap">{fmtDiaLocal(i.inicio)}</td><td className="px-3 py-2 whitespace-nowrap">{fmtDiaLocal(i.fim)}</td>
+          </tr>))}</tbody>
+      </table>
+    </div>
+  );
+
+  const aviso = msg && (
+    <div className={`flex items-start gap-2 px-4 py-3 rounded-lg text-sm ${msg.tipo === 'ok' ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-red-500/10 text-red-300 ring-1 ring-red-500/30'}`}>
+      {msg.tipo === 'ok' ? <CheckCircle2 size={16} className="mt-0.5 shrink-0" /> : <AlertTriangle size={16} className="mt-0.5 shrink-0" />}<span>{msg.texto}</span>
+    </div>
+  );
+
+  const formMetas = (
+    <CelSecao titulo="Metas" info="Percentuais em %, tempos em horas. Deixe em branco para o indicador ficar como informativo. Valem para todos os meses enviados ao Painel de Metas.">
+      <div className="bg-slate-800/50 rounded-xl p-5 ring-1 ring-slate-700/50">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4">
+          {Ch.CHAVES.map(k => { const d = Ch.METAS_PADRAO[k]; return (
+            <Input key={k} type="number" step="any" label={`${d.rotulo} (${d.direcao === 'max' ? 'mínimo' : 'máximo'}${d.tipo === 'pct' ? ', %' : ''})`}
+              value={metasForm[k]} onChange={e => { setMetasForm({ ...metasForm, [k]: e.target.value }); setMetasMsg(''); }} />
+          ); })}
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mt-2">
+          <button onClick={salvarMetas} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Salvar metas</button>
+          <button onClick={() => { setMetasForm(chMetasDoForm({})); setMetasMsg('Valores padrão carregados. Clique em Salvar para aplicar.'); }} className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Restaurar padrão</button>
+          {metasMsg && <span className="text-xs text-slate-400">{metasMsg}</span>}
+        </div>
+      </div>
+    </CelSecao>
+  );
+
+  if (!chamados.length) {
+    return (
+      <div className="space-y-6">
+        {cabecalho}{zona}{aviso}
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">Importe o Relatorio_Chamados.xlsx para ver os indicadores.</div>
+        {formMetas}
+      </div>
+    );
+  }
+
+  const filtros = (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <ChSelect label="Ano" value={filtro.ano} onChange={v => setFiltro({ ...filtro, ano: v })} options={[['', 'Todos'], ...opcoes.anos.map(a => [a, a])]} />
+      <ChSelect label="Mês" value={filtro.mes} onChange={v => setFiltro({ ...filtro, mes: v })} options={[['', 'Todos'], ...MONTHS.map((m, i) => [String(i + 1), m])]} />
+      <ChSelect label="Revenda" value={filtro.revenda} onChange={v => setFiltro({ ...filtro, revenda: v })} options={[['', 'Todas'], ...opcoes.revendas.map(x => [x, x])]} />
+      <ChSelect label="Categoria" value={filtro.categoria} onChange={v => setFiltro({ ...filtro, categoria: v })} options={[['', 'Todas'], ...opcoes.categorias.map(x => [x, x])]} />
+      <ChSelect label="Responsável" value={filtro.responsavel} onChange={v => setFiltro({ ...filtro, responsavel: v })} options={[['', 'Todos'], ...opcoes.responsaveis.map(x => [x, nomeCurto(x) || x])]} />
+    </div>
+  );
+
+  const ind = res.indicadores;
+  const cards = (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <CelCard titulo="Chamados no período" valor={fmtNCel(res.total)} status={Ch.statusMeta('volume', ind.volume.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('volume')]} partes={[['Em aberto', res.emAberto], ['Abertos com prazo vencido', res.atrasados], ['Fora do horário (antes das 7h, após 18h, fim de semana)', fmtPctCel(res.foraHorario.valor)]]}
+        onVer={res.emAberto ? () => verLista('aberto') : undefined} verRotulo="Ver em aberto" />
+      <CelCard titulo={Ch.METAS_PADRAO.sla.rotulo} valor={fmtPctCel(ind.sla.valor)} status={Ch.statusMeta('sla', ind.sla.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('sla'), `${ind.sla.n} de ${ind.sla.de} com SLA no prazo`]} onVer={res.foraPrazo ? () => verLista('foraPrazo') : undefined} verRotulo={`Ver ${res.foraPrazo} fora do prazo`} />
+      <CelCard titulo={Ch.METAS_PADRAO.csat.rotulo} valor={fmtPctCel(ind.csat.valor)} status={Ch.statusMeta('csat', ind.csat.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('csat'), `Nota média ${res.notaMedia == null ? '—' : res.notaMedia.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} · ${ind.csat.de} avaliados`]}
+        onVer={res.lista.some(CH_TEM_FILTRO.notaBaixa) ? () => verLista('notaBaixa') : undefined} verRotulo="Ver notas baixas" />
+      <CelCard titulo={Ch.METAS_PADRAO.taxaAvaliacao.rotulo} valor={fmtPctCel(ind.taxaAvaliacao.valor)} status={Ch.statusMeta('taxaAvaliacao', ind.taxaAvaliacao.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('taxaAvaliacao'), `${ind.taxaAvaliacao.n} de ${ind.taxaAvaliacao.de} encerrados`]} />
+      <CelCard titulo={Ch.METAS_PADRAO.primeiraResposta.rotulo} valor={fmtHoras(ind.primeiraResposta.valor)} status={Ch.statusMeta('primeiraResposta', ind.primeiraResposta.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('primeiraResposta'), `10% demoram mais de ${fmtHoras(ind.primeiraResposta.p90)}`, 'Horas corridas, inclui noites e fins de semana']} />
+      <CelCard titulo={Ch.METAS_PADRAO.resolucao.rotulo} valor={fmtHoras(ind.resolucao.valor)} status={Ch.statusMeta('resolucao', ind.resolucao.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('resolucao'), `10% demoram mais de ${fmtHoras(ind.resolucao.p90)}`, 'Horas corridas, inclui noites e fins de semana']} />
+      <CelCard titulo={Ch.METAS_PADRAO.semResponsavel.rotulo} valor={fmtNCel(ind.semResponsavel.valor)} status={Ch.statusMeta('semResponsavel', ind.semResponsavel.valor, metas)} rotulos={Ch.ROTULO_STATUS}
+        linhas={[metaTxt('semResponsavel')]} onVer={ind.semResponsavel.valor ? () => verLista('semResp') : undefined} verRotulo="Ver chamados" />
+      <CelCard titulo="Tempo de resolução por faixa" valor={`${res.faixas.slice(0, 2).reduce((s, f) => s + f.n, 0)} em até 1 dia`} linhas={['dos chamados encerrados']}
+        partes={res.faixas.map(f => [f.rotulo, f.n])} />
+    </div>
+  );
+
+  const evolucao = res.porMes.length > 0 && (
+    <CelSecao titulo="Evolução mensal" info="Chamados abertos e encerrados por mês, com o % de SLA cumprido dos abertos no mês">
+      <div className="bg-slate-800/50 rounded-xl p-4 ring-1 ring-slate-700/50">
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={res.porMes.map(m => ({ ...m, rotulo: MONTHS[Number(m.mes.slice(5)) - 1] + '/' + m.mes.slice(2, 4), slaPct: m.sla == null ? null : Math.round(m.sla * 1000) / 10 }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis dataKey="rotulo" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+            <YAxis yAxisId="n" tick={{ fill: '#94a3b8', fontSize: 12 }} allowDecimals={false} />
+            <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 12 }} tickFormatter={v => v + '%'} />
+            <Tooltip {...CH_TOOLTIP} formatter={(v, n) => (n === 'SLA cumprido' ? (v == null ? '—' : v + '%') : v)} />
+            <Legend wrapperStyle={{ color: '#94a3b8', fontSize: 12 }} />
+            <Bar yAxisId="n" dataKey="abertos" name="Abertos" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+            <Bar yAxisId="n" dataKey="fechados" name="Encerrados" fill="#64748b" radius={[4, 4, 0, 0]} />
+            <Line yAxisId="pct" type="monotone" dataKey="slaPct" name="SLA cumprido" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </CelSecao>
+  );
+
+  const th = 'px-3 py-3 font-medium whitespace-nowrap';
+  const td = 'px-3 py-2.5';
+  const pctCor = v => (v == null ? 'text-slate-500' : v >= 0.9 ? 'text-emerald-400' : v >= 0.75 ? 'text-amber-400' : 'text-red-400');
+  const maxCat = Math.max(...res.porCategoria.map(c => c.n), 1);
+  const categorias = (
+    <CelSecao titulo="Por categoria" info="Clique numa categoria para filtrar a página toda">
+      <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-slate-700 text-slate-400 text-left">{['Categoria', 'Chamados', 'SLA', 'Resolução (mediana)', '1ª resposta (mediana)', 'Nota', 'Principais assuntos'].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+          <tbody>{res.porCategoria.map(c => (
+            <tr key={c.nome} onClick={() => filtrarPor('categoria', c.nome)} className={`border-b border-slate-700/50 hover:bg-slate-700/30 cursor-pointer text-slate-300 ${filtro.categoria === c.nome ? 'bg-blue-600/10' : ''}`}>
+              <td className={`${td} text-white font-medium whitespace-nowrap`}>{c.nome}</td>
+              <td className={td}><CelBarra qtd={c.n} max={maxCat} pct={c.n / res.total} /></td>
+              <td className={`${td} font-mono ${pctCor(c.sla)}`}>{fmtPctCel(c.sla)}</td>
+              <td className={`${td} whitespace-nowrap`}>{fmtHoras(c.resolucao)}</td>
+              <td className={`${td} whitespace-nowrap`}>{fmtHoras(c.primeiraResposta)}</td>
+              <td className={`${td} font-mono`}>{c.nota == null ? '—' : c.nota.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</td>
+              <td className={`${td} text-xs text-slate-400`}>{c.detalhes.slice(0, 3).map(d => `${d.nome} (${d.n})`).join(' · ')}</td>
+            </tr>))}</tbody>
+        </table>
+      </div>
+    </CelSecao>
+  );
+
+  const maxResp = Math.max(...res.porResponsavel.map(c => c.n), 1);
+  const responsaveis = (
+    <CelSecao titulo="Por responsável" info="Carga e desempenho de cada atendente">
+      <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-slate-700 text-slate-400 text-left">{['Responsável', 'Chamados', 'Em aberto', 'SLA', 'Resolução (mediana)', '1ª resposta (mediana)', 'Nota (avaliados)'].map(h => <th key={h} className={th}>{h}</th>)}</tr></thead>
+          <tbody>{res.porResponsavel.map(r => (
+            <tr key={r.nome} onClick={() => filtrarPor('responsavel', r.nome)} className={`border-b border-slate-700/50 hover:bg-slate-700/30 cursor-pointer text-slate-300 ${filtro.responsavel === r.nome ? 'bg-blue-600/10' : ''}`}>
+              <td className={`${td} text-white font-medium whitespace-nowrap`}>{r.nome === Ch.SEM_RESPONSAVEL ? <span className="text-amber-400">{r.nome}</span> : nomeCurto(r.nome)}</td>
+              <td className={td}><CelBarra qtd={r.n} max={maxResp} pct={r.n / res.total} cor="bg-violet-500" /></td>
+              <td className={`${td} font-mono`}>{r.abertos}</td>
+              <td className={`${td} font-mono ${pctCor(r.sla)}`}>{fmtPctCel(r.sla)}</td>
+              <td className={`${td} whitespace-nowrap`}>{fmtHoras(r.resolucao)}</td>
+              <td className={`${td} whitespace-nowrap`}>{fmtHoras(r.primeiraResposta)}</td>
+              <td className={`${td} font-mono`}>{r.nota == null ? '—' : `${r.nota.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} (${r.avaliados})`}</td>
+            </tr>))}</tbody>
+        </table>
+      </div>
+    </CelSecao>
+  );
+
+  const maxSol = Math.max(...res.solicitantes.map(s => s.n), 1);
+  const solicitantes = (
+    <CelSecao titulo="Quem mais abre chamados" info={`Top 10 de ${res.solicitantes.length} solicitantes: ajuda a achar causas que se repetem`}>
+      <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 p-4 space-y-2">
+        {res.solicitantes.slice(0, 10).map(s => (
+          <div key={s.nome} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[220px_1fr_auto] gap-x-3 items-center text-sm">
+            <span className="text-white truncate" title={s.nome}>{nomeCurto(s.nome)} <span className="text-slate-500 text-xs">· {s.revenda}</span></span>
+            <span className="hidden sm:block text-xs text-slate-500 truncate">{s.categorias.slice(0, 2).map(c => `${c.nome} (${c.n})`).join(' · ')}</span>
+            <div className="w-40"><CelBarra qtd={s.n} max={maxSol} pct={s.n / res.total} cor="bg-cyan-500" /></div>
+          </div>
+        ))}
+      </div>
+    </CelSecao>
+  );
+
+  const maxCalor = Math.max(...res.calor.flat(), 1);
+  const calor = (
+    <CelSecao titulo="Quando os chamados são abertos" info={`Dia da semana × hora · ${res.foraHorario.n} de ${res.foraHorario.de} (${fmtPctCel(res.foraHorario.valor)}) fora do horário comercial`}>
+      <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 p-4 overflow-x-auto">
+        <div className="grid gap-[3px] min-w-[440px]" style={{ gridTemplateColumns: '32px repeat(24, minmax(0, 1fr))' }}>
+          <span />
+          {Array.from({ length: 24 }, (_, h) => <span key={h} className="text-[10px] text-slate-500 text-center">{h % 3 === 0 ? h + 'h' : ''}</span>)}
+          {res.calor.map((linha, d) => [
+            <span key={'d' + d} className="text-xs text-slate-400 self-center">{CH_DIAS[d]}</span>,
+            ...linha.map((n, h) => (
+              <div key={d + '-' + h} title={`${CH_DIAS[d]} ${h}h: ${n} chamado${n === 1 ? '' : 's'}`}
+                className={`h-6 rounded-sm ${n ? '' : 'bg-slate-700/30'} ${(d >= 5 || h < Ch.HORARIO.inicio || h >= Ch.HORARIO.fim) && !n ? 'opacity-50' : ''}`}
+                style={n ? { background: `rgba(59, 130, 246, ${0.2 + 0.8 * n / maxCalor})` } : undefined} />
+            )),
+          ])}
+        </div>
+      </div>
+    </CelSecao>
+  );
+
+  const contagem = Object.fromEntries(CH_FILTROS.map(([f]) => [f, res.lista.filter(CH_TEM_FILTRO[f]).length]));
+  const q = busca.trim().toLowerCase();
+  const lista = res.lista.filter(CH_TEM_FILTRO[filtroLista])
+    .filter(c => !q || [c.id, c.assunto, c.colaborador, c.responsavel, c.categoria, c.detalhe, c.status].join(' ').toLowerCase().includes(q));
+  const statusCls = c => (Ch.atrasado(c) ? 'bg-red-500/20 text-red-400' : Ch.emAberto(c) ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-500/20 text-slate-400');
+  const tabela = (
+    <div ref={listaRef} className="scroll-mt-4">
+      <CelSecao titulo="Chamados" info={`${lista.length} de ${res.total} chamados · clique para ver os trâmites`}
+        acoes={<div className="relative sm:w-80"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nº, assunto, solicitante, responsável" className="w-full bg-slate-900/60 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>}>
+        <div className="flex flex-wrap gap-2">
+          {CH_FILTROS.map(([f, l]) => (
+            <button key={f} onClick={() => setFiltroLista(f)} aria-pressed={filtroLista === f} className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${filtroLista === f ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 ring-1 ring-slate-700 hover:text-white'}`}>{l} ({contagem[f]})</button>
+          ))}
+        </div>
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 overflow-auto max-h-[620px]">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-slate-800"><tr className="border-b border-slate-700 text-slate-400 text-left">
+              {['Nº', 'Aberto em', 'Assunto', 'Solicitante', 'Categoria', 'Responsável', 'Status', '1ª resposta', 'Resolução', 'SLA', 'Nota'].map(h => <th key={h} className={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {lista.map(c => (
+                <tr key={c.id} onClick={() => setAberto(c.id)} className="border-b border-slate-700/50 hover:bg-slate-700/30 cursor-pointer transition text-slate-300 align-top">
+                  <td className={`${td} font-mono text-xs text-slate-400`}>{c.id}</td>
+                  <td className={`${td} whitespace-nowrap text-xs`}>{fmtLocal(c.aberto_em)}</td>
+                  <td className={`${td} text-white min-w-[200px]`}>{c.assunto}</td>
+                  <td className={`${td} whitespace-nowrap`}>{nomeCurto(c.colaborador)}</td>
+                  <td className={`${td} text-xs`}><div className="min-w-[140px]">{c.categoria}<span className="text-slate-500 block">{c.detalhe}</span></div></td>
+                  <td className={`${td} whitespace-nowrap`}>{c.responsavel ? nomeCurto(c.responsavel) : <span className="text-amber-400">—</span>}</td>
+                  <td className={td}><CelPill cls={statusCls(c)}>{Ch.atrasado(c) ? 'Prazo vencido' : c.status}</CelPill></td>
+                  <td className={`${td} whitespace-nowrap text-xs`}>{fmtHoras(Ch.horasPrimeiraResposta(c))}</td>
+                  <td className={`${td} whitespace-nowrap text-xs`}>{fmtHoras(Ch.horasResolucao(c))}</td>
+                  <td className={td}>{c.sla ? <CelPill cls={Ch.foraDoPrazo(c) ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}>{c.sla}</CelPill> : <span className="text-slate-500">—</span>}</td>
+                  <td className={`${td} font-mono ${c.avaliacao != null && c.avaliacao <= 3 ? 'text-red-400' : ''}`}>{c.avaliacao ?? '—'}</td>
+                </tr>
+              ))}
+              {lista.length === 0 && <tr><td colSpan={11} className="px-4 py-12 text-center text-slate-500">Nenhum chamado neste filtro.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </CelSecao>
+    </div>
+  );
+
+  return (
+    <div className="space-y-8">
+      <div className="space-y-4">{cabecalho}{zona}{historico}{aviso}</div>
+      {filtros}
+      {res.total === 0 ? (
+        <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">Nenhum chamado com estes filtros.</div>
+      ) : (<>
+        {cards}
+        {evolucao}
+        {categorias}
+        {responsaveis}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">{solicitantes}{calor}</div>
+        {tabela}
+      </>)}
+      {formMetas}
+      <ChDetalhe id={aberto} onClose={() => setAberto(null)} />
+    </div>
+  );
+}
+
 /* ═══════════ PAINEL DE METAS ═══════════ */
 // Cada assunto define seu título e como comparar valor × meta (Celulares usa statusMeta do módulo).
 const PAINEL_ASSUNTOS = {
   celulares: { titulo: 'Gestão de Celulares', indicadores: CEL_INDICADORES, status: (chave, valor, meta) => statusMeta(chave, valor, { [chave]: meta }) },
   computadores: { titulo: 'Gestão de Computadores', indicadores: COMP_INDICADORES, rotulos: Comp.ROTULO_STATUS, status: (chave, valor, meta) => Comp.statusMeta(chave, valor, { [chave]: meta }) },
+  chamados: { titulo: 'Chamados de TI', indicadores: Ch.CHAVES, rotulos: Ch.ROTULO_STATUS, status: (chave, valor, meta) => Ch.statusMeta(chave, valor, { [chave]: meta }) },
 };
 const PAINEL_CELULA = { ok: 'bg-emerald-500/15 text-emerald-300', warn: 'bg-amber-500/15 text-amber-300', crit: 'bg-red-500/15 text-red-300', na: 'text-slate-300', nodata: 'text-slate-600' };
 const fmtValorMeta = (tipo, v) => (v == null ? '—' : tipo === 'pct' ? fmtPctCel(v) : fmtNCel(v));
@@ -3835,7 +4257,7 @@ function PainelMetasPage() {
 
       {Object.keys(grupos).length === 0 ? (
         <div className="bg-slate-800/50 rounded-xl ring-1 ring-slate-700/50 py-16 px-4 text-center text-slate-500 text-sm">
-          Nenhum dado em {ano}. Os meses são preenchidos automaticamente ao importar os relatórios nas páginas Celulares e Computadores.
+          Nenhum dado em {ano}. Os meses são preenchidos automaticamente ao importar os relatórios nas páginas Celulares, Computadores e Chamados.
         </div>
       ) : Object.entries(grupos).map(([assunto, inds]) => {
         const cfg = PAINEL_ASSUNTOS[assunto] || { titulo: assunto, status: () => 'na' };
@@ -3896,6 +4318,7 @@ const NAV = [
   { key: 'telecom', label: 'Linhas Móveis', icon: Smartphone },
   { key: 'celulares', label: 'Celulares', icon: TabletSmartphone },
   { key: 'computadores', label: 'Computadores', icon: Laptop },
+  { key: 'chamados', label: 'Chamados', icon: LifeBuoy },
   { key: 'licenses', label: 'Licencas', icon: FileKey },
   { key: 'contracts', label: 'Contratos', icon: Briefcase },
   { key: 'budget', label: 'Orcamento', icon: DollarSign },
@@ -3905,7 +4328,7 @@ const NAV = [
   { key: 'users', label: 'Usuários', icon: Users },
 ];
 // Páginas restritas ao perfil admin (Celulares mostra nome, telefone e IMEI de funcionários)
-const NAV_ADMIN = ['users', 'celulares', 'computadores'];
+const NAV_ADMIN = ['users', 'celulares', 'computadores', 'chamados'];
 
 function Login({ onLogin }) {
   const [user, setUser] = useState('');
@@ -4532,6 +4955,7 @@ export default function App() {
       case 'telecom': return <TelecomPage user={user} />;
       case 'celulares': return user && user.role === 'admin' ? <CelularesPage /> : <Dashboard />;
       case 'computadores': return user && user.role === 'admin' ? <ComputadoresPage /> : <Dashboard />;
+      case 'chamados': return user && user.role === 'admin' ? <ChamadosPage /> : <Dashboard />;
       case 'licenses': return <Licenses user={user} />;
       case 'contracts': return <ContractsPage />;
       case 'budget': return <Budget />;

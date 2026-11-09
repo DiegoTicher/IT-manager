@@ -3,6 +3,7 @@ from functools import wraps
 import sqlite3, os, json, uuid, csv, io, hashlib
 from datetime import datetime
 from flask_cors import CORS
+import chamados_xlsx
 
 # Detecta pasta do frontend buildado (../frontend/dist)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -99,6 +100,10 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_ci_base ON celulares_importacoes(base);
     CREATE TABLE IF NOT EXISTS computadores_arquivos (tipo TEXT PRIMARY KEY CHECK(tipo IN ('ocs','ad_computadores','ad_usuarios')), base TEXT, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), dados TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS computadores_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS chamados (id TEXT PRIMARY KEY, assunto TEXT, descricao TEXT, colaborador TEXT, revenda TEXT, tipo TEXT, categoria TEXT, detalhe TEXT, aberto_em TEXT NOT NULL, encerrado_em TEXT, prazo_em TEXT, sla TEXT, responsavel TEXT, status TEXT, avaliacao INTEGER, primeira_resposta_em TEXT, interacoes INTEGER DEFAULT 0, tramites TEXT, importacao_id TEXT, atualizado_em TEXT DEFAULT (datetime('now')));
+    CREATE INDEX IF NOT EXISTS idx_ch_aberto ON chamados(aberto_em);
+    CREATE TABLE IF NOT EXISTS chamados_importacoes (id TEXT PRIMARY KEY, arquivo TEXT, importado_por TEXT, importado_em TEXT DEFAULT (datetime('now')), total INTEGER DEFAULT 0, novos INTEGER DEFAULT 0, atualizados INTEGER DEFAULT 0, inicio TEXT, fim TEXT);
+    CREATE TABLE IF NOT EXISTS chamados_metas (chave TEXT PRIMARY KEY, meta REAL, atualizado_em TEXT DEFAULT (datetime('now')));
     """)
     # Migracao simples para bases existentes
     try:
@@ -1238,6 +1243,100 @@ def put_computadores_mes():
     if msg: return error(msg)
     gravar_mes_painel("computadores", ref, d["indicadores"], g.user["username"], datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
     return success(message=f"Painel de Metas de {ref[5:7]}/{ref[:4]} atualizado")
+
+# ─────────── CHAMADOS DE TI ───────────
+# Importacao do Relatorio_Chamados.xlsx do sistema de chamados (leitura em chamados_xlsx.py).
+# Cada chamado e guardado pelo ID do sistema de origem: importar de novo atualiza os existentes,
+# entao relatorios de periodos sobrepostos podem ser importados sem duplicar. Os indicadores sao
+# calculados no frontend (src/lib/chamados-indicadores.ts), que manda os meses para o Painel de Metas.
+# Tem nomes de colaboradores e o texto dos chamados: acesso restrito a TI (admin).
+CHAMADOS_METAS = ["volume", "sla", "csat", "primeiraResposta", "resolucao", "taxaAvaliacao", "semResponsavel"]
+CHAMADOS_CAMPOS = ["id", "assunto", "descricao", "colaborador", "revenda", "tipo", "categoria", "detalhe", "aberto_em", "encerrado_em",
+                   "prazo_em", "sla", "responsavel", "status", "avaliacao", "primeira_resposta_em", "interacoes"]
+
+@app.route("/api/chamados", methods=["GET"])
+@auth_required
+def list_chamados():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    return success(query_db(f"SELECT {', '.join(CHAMADOS_CAMPOS)} FROM chamados ORDER BY aberto_em DESC"))
+
+@app.route("/api/chamados/<cid>", methods=["GET"])
+@auth_required
+def get_chamado(cid):
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    r = query_db("SELECT * FROM chamados WHERE id=?", [cid], one=True)
+    if not r: return error("Chamado nao encontrado", 404)
+    r["tramites"] = json.loads(r["tramites"]) if r["tramites"] else []
+    return success(r)
+
+@app.route("/api/chamados/importar", methods=["POST"])
+@auth_required
+def importar_chamados():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+
+    f = request.files.get("file")
+    if not f or not f.filename: return error("Nenhum arquivo enviado")
+    try:
+        lidos, avisos = chamados_xlsx.ler_relatorio(io.BytesIO(f.read()))
+    except ValueError as ex:
+        return error(str(ex))
+    if not lidos: return error("Nenhum chamado encontrado no arquivo")
+    por_id = {c["id"]: c for c in lidos}  # ID repetido: vale a ultima linha
+    existentes = {r["id"] for r in query_db("SELECT id FROM chamados")}
+    iid = gen_id()
+    db = get_db()
+    cols = CHAMADOS_CAMPOS + ["tramites", "importacao_id"]
+    db.executemany(f"INSERT OR REPLACE INTO chamados({', '.join(cols)}, atualizado_em) VALUES({', '.join('?' * len(cols))}, datetime('now'))",
+                   [[c[k] for k in CHAMADOS_CAMPOS] + [json.dumps(c["tramites"], ensure_ascii=False), iid] for c in por_id.values()])
+    novos = sum(1 for k in por_id if k not in existentes)
+    datas = sorted(c["aberto_em"] for c in por_id.values())
+    db.execute("INSERT INTO chamados_importacoes(id, arquivo, importado_por, importado_em, total, novos, atualizados, inicio, fim) VALUES(?,?,?,datetime('now'),?,?,?,?,?)",
+               (iid, f.filename, g.user["username"], len(por_id), novos, len(por_id) - novos, datas[0], datas[-1]))
+    db.commit()
+    return success({"id": iid, "total": len(por_id), "novos": novos, "atualizados": len(por_id) - novos, "inicio": datas[0], "fim": datas[-1], "avisos": avisos},
+                   f"{len(por_id)} chamados importados ({novos} novos, {len(por_id) - novos} atualizados)", 201)
+
+@app.route("/api/chamados/importacoes", methods=["GET"])
+@auth_required
+def list_chamados_importacoes():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    return success(query_db("SELECT id, arquivo, importado_por, importado_em, total, novos, atualizados, inicio, fim FROM chamados_importacoes ORDER BY importado_em DESC"))
+
+@app.route("/api/chamados/metas", methods=["GET"])
+@auth_required
+def get_chamados_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    return success({r["chave"]: r["meta"] for r in query_db("SELECT chave, meta FROM chamados_metas")})
+
+@app.route("/api/chamados/metas", methods=["PUT"])
+@auth_required
+def put_chamados_metas():
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    d = request.json or {}
+    for chave, meta in d.items():
+        if chave not in CHAMADOS_METAS: return error(f"Meta desconhecida: {chave}")
+        if meta is not None and not isinstance(meta, (int, float)): return error(f"Meta invalida para {chave}")
+    for chave, meta in d.items():
+        execute_db("INSERT OR REPLACE INTO chamados_metas(chave, meta, atualizado_em) VALUES(?,?,datetime('now'))", (chave, meta))
+    return success(message="Metas salvas")
+
+@app.route("/api/chamados/meses", methods=["PUT"])
+@auth_required
+def put_chamados_meses():
+    # Chamado pela pagina depois de importar ou mudar metas: um item por mes de abertura dos chamados,
+    # com os valores recalculados e as metas vigentes.
+    if not celulares_acesso(): return error("Acesso restrito a TI", 403)
+    meses = (request.json or {}).get("meses")
+    if not isinstance(meses, list) or not meses: return error("Nenhum mes informado")
+    for m in meses:
+        ref = m.get("referencia") or ""
+        if len(ref) < 7: return error("Referencia de mes invalida")
+        msg = validar_indicadores(m.get("indicadores"), CHAMADOS_METAS)
+        if msg: return error(msg)
+    em = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    for m in meses:
+        gravar_mes_painel("chamados", m["referencia"], m["indicadores"], g.user["username"], em)
+    return success(message=f"Painel de Metas atualizado ({len(meses)} meses)")
 
 # ─────────── PAINEL DE METAS ───────────
 # Valores mensais por assunto. Celulares e preenchido automaticamente pelas importacoes;
